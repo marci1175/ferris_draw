@@ -1,0 +1,10 @@
+[package]
+name = "ferris_draw"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+env_logger = "0.11.5"
+serde = {version = "1.0.215", features = ["derive"]}
+bevy = "0.15"
+bevy_egui = "0.31"
