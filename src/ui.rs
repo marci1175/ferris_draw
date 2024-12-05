@@ -6,7 +6,7 @@ use bevy::prelude::Resource;
 use egui_tiles::Tiles;
 use indexmap::IndexMap;
 
-use crate::LUA_RUNTIME;
+use crate::LuaRuntime;
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 pub struct UiState {
@@ -41,6 +41,7 @@ pub enum ManagerPane {
 
 pub struct ManagerBehavior {
     pub code_manager_window: Arc<AtomicBool>,
+    pub lua_runtime: LuaRuntime,
 }
 
 impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
@@ -63,8 +64,8 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                         if ui.button("Run").clicked() {
                             let script = script.to_string();
                             
-                            if let Err(err) = LUA_RUNTIME.lock().unwrap().load(script).exec() {
-                                panic!("{err}");
+                            if let Err(err) = self.lua_runtime.0.load(script).exec() {
+                                //Display err
                             };
                         }
 
@@ -100,7 +101,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
     }
 }
 
-pub fn main_ui(mut ui_state: ResMut<UiState>, mut contexts: EguiContexts<'_, '_>) {
+pub fn main_ui(mut ui_state: ResMut<UiState>, mut contexts: EguiContexts<'_, '_>, lua_runtime: ResMut<LuaRuntime>) {
     let ctx = contexts.ctx_mut();
 
     if ui_state.code_manager_window.load(Ordering::Relaxed) {
@@ -155,7 +156,8 @@ pub fn main_ui(mut ui_state: ResMut<UiState>, mut contexts: EguiContexts<'_, '_>
             let code_manager_window =  ui_state.code_manager_window.clone();
 
             ui_state.item_manager.ui(&mut ManagerBehavior {
-                code_manager_window 
+                code_manager_window,
+                lua_runtime: lua_runtime.clone(),
             }, ui);
         });
     }

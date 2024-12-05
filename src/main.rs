@@ -5,7 +5,7 @@ use bevy::{
     app::{App, FixedPreUpdate, FixedUpdate, Startup, Update}, asset::Assets, color::Color, math::Vec3, prelude::{Camera2d, Commands, Entity, Mesh, Mesh2d, Query, Res, ResMut, With}, sprite::{ColorMaterial, MeshMaterial2d}, DefaultPlugins
 };
 use bevy_egui::EguiPlugin;
-use ferris_draw::{init_lua_functions, ui::{main_ui, UiState}, DrawerEntity, Drawers, LineStrip, LUA_RUNTIME};
+use ferris_draw::{init_lua_functions, ui::{main_ui, UiState}, DrawerEntity, Drawers, LineStrip, LuaRuntime};
 use mlua::Lua;
 
 #[tokio::main]
@@ -15,6 +15,7 @@ async fn main() {
         .add_plugins(EguiPlugin)
         .init_resource::<UiState>()
         .init_resource::<Drawers>()
+        .init_resource::<LuaRuntime>()
         .add_systems(Startup, setup)
         .add_systems(Update, main_ui)
         .add_systems(FixedUpdate, draw)
@@ -24,14 +25,13 @@ async fn main() {
 fn setup(
     mut commands: Commands,
     drawers: Res<Drawers>,
+    lua_runtime: ResMut<LuaRuntime>,
 ) {
     commands.spawn(Camera2d);
 
     let drawers_handle = drawers.0.clone();
 
-    *LUA_RUNTIME.lock().unwrap() = init_lua_functions(unsafe {
-        Lua::unsafe_new()
-    }, drawers_handle);
+    init_lua_functions(lua_runtime, drawers_handle);
 }
 
 fn draw(

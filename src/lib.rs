@@ -1,12 +1,20 @@
 use std::sync::{Arc, Mutex};
 
-use bevy::{asset::RenderAssetUsages, color::Color, math::{Vec2, Vec3}, prelude::{Component, Mesh, Resource}, render::mesh::PrimitiveTopology, text::cosmic_text::Angle};
+use bevy::{asset::RenderAssetUsages, color::Color, math::{Vec2, Vec3}, prelude::{Component, Mesh, ResMut, Resource}, render::mesh::PrimitiveTopology, text::cosmic_text::Angle};
 pub mod ui;
 use dashmap::DashMap;
 use mlua::Lua;
-use once_cell::sync::Lazy;
 
-pub const LUA_RUNTIME: Lazy<Arc<Mutex<Lua>>> = Lazy::new(|| Arc::new(Mutex::new(Lua::new())));
+#[derive(Resource, Clone)]
+pub struct LuaRuntime(pub Lua);
+
+impl Default for LuaRuntime {
+    fn default() -> Self {
+        Self(unsafe {
+            Lua::unsafe_new()
+        })
+    }
+}
 
 #[derive(Component)]
 pub struct DrawerEntity(pub String);
@@ -49,7 +57,9 @@ pub struct DrawerInfo {
 #[derive(Resource, Default, Debug)]
 pub struct Drawers(pub Arc<DashMap<String, DrawerInfo>>);
 
-pub fn init_lua_functions(lua_vm: Lua, drawers_handle: std::sync::Arc<dashmap::DashMap<String, DrawerInfo>>) -> Lua {
+pub fn init_lua_functions(lua_rt: ResMut<LuaRuntime>, drawers_handle: std::sync::Arc<dashmap::DashMap<String, DrawerInfo>>) {
+    let lua_vm = lua_rt.0.clone();
+
     let drawers_clone = drawers_handle.clone();
 
     let new_drawer = lua_vm.create_function(move |_, id: String| {
@@ -112,6 +122,4 @@ pub fn init_lua_functions(lua_vm: Lua, drawers_handle: std::sync::Arc<dashmap::D
     lua_vm.globals().set("new_drawer", new_drawer).unwrap();
     lua_vm.globals().set("rotate_drawer", rotate_drawer).unwrap();
     lua_vm.globals().set("forward", forward).unwrap();
-
-    lua_vm
 }
