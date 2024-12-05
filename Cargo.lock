@@ -1943,6 +1943,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96a6ac251f4a2aca6b3f91340350eab87ae57c3f127ffeb585e92bd336717991"
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2051,6 +2065,15 @@ dependencies = [
  "epaint",
  "nohash-hasher",
  "serde",
+]
+
+[[package]]
+name = "egui-toast"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95d58a44bf48161fe6a3f12386722e99bf86b2c16d23c2d04f6a48a95a5923d2"
+dependencies = [
+ "egui",
 ]
 
 [[package]]
@@ -2261,6 +2284,8 @@ dependencies = [
  "anyhow",
  "bevy",
  "bevy_egui",
+ "dashmap",
+ "egui-toast",
  "egui_tiles",
  "env_logger",
  "indexmap",

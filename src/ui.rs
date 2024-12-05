@@ -1,5 +1,5 @@
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
-use bevy::{prelude::{Res, ResMut}, tasks::TaskPool};
+use bevy::prelude::ResMut;
 use bevy_egui::{egui, EguiContexts};
 
 use bevy::prelude::Resource;
@@ -63,7 +63,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                         if ui.button("Run").clicked() {
                             let script = script.to_string();
                             
-                            LUA_RUNTIME.load(script).exec().unwrap();
+                            if let Err(err) = LUA_RUNTIME.lock().unwrap().load(script).exec() {
+                                panic!("{err}");
+                            };
                         }
 
                         ui.push_id(name, |ui| {
