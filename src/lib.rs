@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::{ops::{Deref, DerefMut}, sync::Arc};
 
-use bevy::{asset::RenderAssetUsages, color::Color, math::{Vec2, Vec3}, prelude::{Component, Mesh, ResMut, Resource}, render::mesh::PrimitiveTopology, text::cosmic_text::Angle};
+use bevy::{asset::RenderAssetUsages, color::Color, ecs::query::{QueryData, WorldQuery}, math::{Vec2, Vec3}, prelude::{Component, Mesh, ResMut, Resource}, render::mesh::PrimitiveTopology, text::cosmic_text::Angle};
 pub mod ui;
 use dashmap::DashMap;
 use mlua::Lua;
@@ -13,6 +13,22 @@ impl Default for LuaRuntime {
         Self(unsafe {
             Lua::unsafe_new()
         })
+    }
+}
+
+/// Implement dereferencing for LuaRuntime so that I wouldnt have to call .0 everytime i want to access the inner value.
+impl Deref for LuaRuntime {
+    type Target = Lua;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Implement dereferencing for LuaRuntime so that I wouldnt have to call .0 everytime i want to access the inner value.
+impl DerefMut for LuaRuntime {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -46,24 +62,51 @@ impl From<LineStrip> for Mesh {
     }
 }
 
+/// The information of the Drawer
 #[derive(Resource, Debug, Default)]
-pub struct DrawerInfo {
+pub struct Drawer {
+    /// The position of the Drawer.
     pub pos: Vec2,
+    
+    /// The angle of the Drawer.
     pub ang: Angle,
+
+    /// The line drawn by the drawer.
     pub line: LineStrip,
+    
+    /// The color of the Drawer.
     pub color: Color,
 }
 
+/// The list of the drawers currently alive.
+/// This list is modified through the [`Lua`] runtime.
+/// The key is a [`String`] is used to identify each individual [`Drawer`].
 #[derive(Resource, Default, Debug)]
-pub struct Drawers(pub Arc<DashMap<String, DrawerInfo>>);
+pub struct Drawers(pub Arc<DashMap<String, Drawer>>);
 
-pub fn init_lua_functions(lua_rt: ResMut<LuaRuntime>, drawers_handle: std::sync::Arc<dashmap::DashMap<String, DrawerInfo>>) {
-    let lua_vm = lua_rt.0.clone();
+impl Deref for Drawers {
+    type Target = Arc<DashMap<String, Drawer>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Drawers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// Create a valid* [`Lua`] runtime.
+/// This function automaticly adds all the functions to the global variables.
+pub fn init_lua_functions(lua_rt: ResMut<LuaRuntime>, drawers_handle: std::sync::Arc<dashmap::DashMap<String, Drawer>>) {
+    let lua_vm = lua_rt.clone();
 
     let drawers_clone = drawers_handle.clone();
 
     let new_drawer = lua_vm.create_function(move |_, id: String| {
-        let insertion = drawers_clone.insert(id.clone(), DrawerInfo::default());
+        let insertion = drawers_clone.insert(id.clone(), Drawer::default());
 
         if insertion.is_some() {
             return Err(mlua::Error::RuntimeError(format!("The drawer with handle {id} already exists.")));

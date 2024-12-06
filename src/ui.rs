@@ -1,6 +1,6 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{atomic::AtomicBool, Arc};
 use bevy::prelude::ResMut;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::EguiContexts;
 
 use bevy::prelude::Resource;
 use egui_tiles::Tiles;
@@ -9,12 +9,16 @@ use indexmap::IndexMap;
 use crate::LuaRuntime;
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct UiState {
+    /// Should the manager panel open.
     pub manager_panel: bool,
 
     #[serde(skip)]
+    /// Should the new viewport open? NOTE: This egui backend doesnt support multiple viewports.
     pub code_manager_window: Arc<AtomicBool>,
 
+    /// The manager panel's tab state.
     pub item_manager: egui_tiles::Tree<ManagerPane>,
 }
 
@@ -32,6 +36,7 @@ impl Default for UiState {
     }
 }
 
+/// The manager panel's tabs.
 #[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub enum ManagerPane {
     Scripts(IndexMap<String, String>),
@@ -39,8 +44,12 @@ pub enum ManagerPane {
     ItemManager,
 }
 
+/// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
 pub struct ManagerBehavior {
+    /// Should the new viewport open? NOTE: This egui backend doesnt support multiple viewports.
     pub code_manager_window: Arc<AtomicBool>,
+
+    /// The [`mlua::Lua`] runtime handle, this can be used to run code on.
     pub lua_runtime: LuaRuntime,
 }
 
@@ -64,7 +73,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                         if ui.button("Run").clicked() {
                             let script = script.to_string();
                             
-                            if let Err(err) = self.lua_runtime.0.load(script).exec() {
+                            if let Err(err) = self.lua_runtime.load(script).exec() {
                                 //Display err
                             };
                         }
@@ -104,24 +113,24 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
 pub fn main_ui(mut ui_state: ResMut<UiState>, mut contexts: EguiContexts<'_, '_>, lua_runtime: ResMut<LuaRuntime>) {
     let ctx = contexts.ctx_mut();
 
-    if ui_state.code_manager_window.load(Ordering::Relaxed) {
-        let code_manager_window = ui_state.code_manager_window.clone();
-        ctx.show_viewport_deferred(
-            egui::ViewportId::from_hash_of("deferred_viewport"),
-            egui::ViewportBuilder::default()
-                .with_title("Deferred Viewport")
-                .with_inner_size([200.0, 100.0]),
-            move |ctx, class| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.label("Hello from deferred viewport");
-                });
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    // Tell parent to close us.
-                    code_manager_window.store(false, Ordering::Relaxed);
-                }
-            },
-        );
-    }
+    // if ui_state.code_manager_window.load(Ordering::Relaxed) {
+    //     let code_manager_window = ui_state.code_manager_window.clone();
+    //     ctx.show_viewport_deferred(
+    //         egui::ViewportId::from_hash_of("deferred_viewport"),
+    //         egui::ViewportBuilder::default()
+    //             .with_title("Deferred Viewport")
+    //             .with_inner_size([200.0, 100.0]),
+    //         move |ctx, class| {
+    //             egui::CentralPanel::default().show(ctx, |ui| {
+    //                 ui.label("Hello from deferred viewport");
+    //             });
+    //             if ctx.input(|i| i.viewport().close_requested()) {
+    //                 // Tell parent to close us.
+    //                 code_manager_window.store(false, Ordering::Relaxed);
+    //             }
+    //         },
+    //     );
+    // }
 
     bevy_egui::egui::TopBottomPanel::top("top_panel")
         .resizable(true)

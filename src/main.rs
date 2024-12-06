@@ -1,12 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] 
 
+use std::{fs, path::PathBuf};
+
 // hide console window on Windows in release
 use bevy::{
-    app::{App, FixedPreUpdate, FixedUpdate, Startup, Update}, asset::Assets, color::Color, math::Vec3, prelude::{Camera2d, Commands, Entity, Mesh, Mesh2d, Query, Res, ResMut, With}, sprite::{ColorMaterial, MeshMaterial2d}, DefaultPlugins
+    app::{App, AppExit, FixedUpdate, PreUpdate, Startup, Update}, asset::Assets, prelude::{Camera2d, Changed, Commands, Entity, EventReader, Mesh, Mesh2d, OnExit, Query, Res, ResMut, With}, sprite::{ColorMaterial, MeshMaterial2d}, DefaultPlugins
 };
 use bevy_egui::EguiPlugin;
-use ferris_draw::{init_lua_functions, ui::{main_ui, UiState}, DrawerEntity, Drawers, LineStrip, LuaRuntime};
-use mlua::Lua;
+use ferris_draw::{init_lua_functions, ui::{main_ui, UiState}, DrawerEntity, Drawers, LuaRuntime};
+use miniz_oxide::deflate::CompressionLevel;
 
 #[tokio::main]
 async fn main() {
@@ -17,21 +19,61 @@ async fn main() {
         .init_resource::<Drawers>()
         .init_resource::<LuaRuntime>()
         .add_systems(Startup, setup)
+        .add_systems(PreUpdate, clear_screen)
         .add_systems(Update, main_ui)
-        .add_systems(FixedUpdate, draw)
+        .add_systems(Update, draw)
+        .add_systems(Update, exit_handler)
         .run();
 }
 
 fn setup(
     mut commands: Commands,
     drawers: Res<Drawers>,
+    mut ui_state: ResMut<UiState>,
     lua_runtime: ResMut<LuaRuntime>,
 ) {
+    //Load in save
+    let mut app_data_path = PathBuf::from(env!("APPDATA"));
+
+    app_data_path.push("ferris_draw");
+    app_data_path.push("serde.data");
+    
+    match fs::read(app_data_path) {
+        Ok(read_bytes) => {
+            let decompressed_data = miniz_oxide::inflate::decompress_to_vec(&read_bytes).unwrap();
+
+        let data: UiState = rmp_serde::from_slice(&decompressed_data).unwrap();
+
+        *ui_state = data;
+        },
+        Err(_err) => {
+            //The save didnt exist
+        },
+    }
+
+    
+
     commands.spawn(Camera2d);
 
-    let drawers_handle = drawers.0.clone();
+    init_lua_functions(lua_runtime, drawers.clone());
+}
 
-    init_lua_functions(lua_runtime, drawers_handle);
+fn exit_handler(exit_events: EventReader<AppExit>, ui_state: Res<UiState>) {
+    // This indicated that the app has been closed
+    if !exit_events.is_empty() {
+        let mut app_data_path = PathBuf::from(env!("APPDATA"));
+
+        app_data_path.push("ferris_draw");
+
+        fs::create_dir_all(app_data_path.clone()).unwrap();
+        
+        app_data_path.push("serde.data");
+        
+        let compressed_data = miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&*ui_state).unwrap(), CompressionLevel::BestCompression as u8);
+        
+
+        fs::write(app_data_path, compressed_data).unwrap();
+    }
 }
 
 fn draw(
@@ -41,14 +83,14 @@ fn draw(
     drawers: Res<Drawers>,
 )
 {
-    for drawer in drawers.0.iter() {
+    for drawer in drawers.iter() {
         let (id, drawer_info) = drawer.pair();
 
         let shape = meshes.add(drawer_info.line.clone());
     
         commands.spawn((
             Mesh2d(shape),
-            MeshMaterial2d(materials.add(drawer_info.color.clone())),
+            MeshMaterial2d(materials.add(drawer_info.color)),
             DrawerEntity(id.clone()),
         ));
     }
