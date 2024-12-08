@@ -19,3 +19,5 @@ dashmap = "6.1.0"
 egui-toast = "0.15.0"
 rmp-serde = "1.3.0"
 miniz_oxide = "0.8.0"
+rfd = "0.15.1"
+egui_extras = {version = "0.29.1", features = ["all_loaders"]}

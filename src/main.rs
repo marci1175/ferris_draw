@@ -1,19 +1,37 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use bevy::prelude::PluginGroup;
+use bevy::window::{Window, WindowPlugin};
 use std::{fs, path::PathBuf};
-
 // hide console window on Windows in release
 use bevy::{
-    app::{App, AppExit, FixedUpdate, PreUpdate, Startup, Update}, asset::Assets, prelude::{Camera2d, Changed, Commands, Entity, EventReader, Mesh, Mesh2d, OnExit, Query, Res, ResMut, With}, sprite::{ColorMaterial, MeshMaterial2d}, DefaultPlugins
+    app::{App, AppExit, PreUpdate, Startup, Update},
+    asset::{AssetServer, Assets},
+    math::vec3,
+    prelude::{
+        Camera2d, Commands, Entity, EventReader, Mesh, Mesh2d, Query, Res, ResMut, Transform, With,
+    },
+    sprite::{ColorMaterial, MeshMaterial2d, Sprite},
+    DefaultPlugins,
 };
 use bevy_egui::EguiPlugin;
-use ferris_draw::{init_lua_functions, ui::{main_ui, UiState}, DrawerEntity, Drawers, LuaRuntime};
+use ferris_draw::{
+    init_lua_functions,
+    ui::{main_ui, UiState},
+    DrawerEntity, Drawers, LuaRuntime,
+};
 use miniz_oxide::deflate::CompressionLevel;
 
 #[tokio::main]
 async fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Ferris Draw".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
         .add_plugins(EguiPlugin)
         .init_resource::<UiState>()
         .init_resource::<Drawers>()
@@ -37,21 +55,19 @@ fn setup(
 
     app_data_path.push("ferris_draw");
     app_data_path.push("serde.data");
-    
+
     match fs::read(app_data_path) {
         Ok(read_bytes) => {
             let decompressed_data = miniz_oxide::inflate::decompress_to_vec(&read_bytes).unwrap();
 
-        let data: UiState = rmp_serde::from_slice(&decompressed_data).unwrap();
+            let data: UiState = rmp_serde::from_slice(&decompressed_data).unwrap();
 
-        *ui_state = data;
-        },
+            *ui_state = data;
+        }
         Err(_err) => {
             //The save didnt exist
-        },
+        }
     }
-
-    
 
     commands.spawn(Camera2d);
 
@@ -66,11 +82,13 @@ fn exit_handler(exit_events: EventReader<AppExit>, ui_state: Res<UiState>) {
         app_data_path.push("ferris_draw");
 
         fs::create_dir_all(app_data_path.clone()).unwrap();
-        
+
         app_data_path.push("serde.data");
-        
-        let compressed_data = miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&*ui_state).unwrap(), CompressionLevel::BestCompression as u8);
-        
+
+        let compressed_data = miniz_oxide::deflate::compress_to_vec(
+            &rmp_serde::to_vec(&*ui_state).unwrap(),
+            CompressionLevel::BestCompression as u8,
+        );
 
         fs::write(app_data_path, compressed_data).unwrap();
     }
@@ -81,16 +99,23 @@ fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     drawers: Res<Drawers>,
-)
-{
+    asset_server: Res<AssetServer>,
+) {
     for drawer in drawers.iter() {
         let (id, drawer_info) = drawer.pair();
 
         let shape = meshes.add(drawer_info.line.clone());
-    
+
         commands.spawn((
             Mesh2d(shape),
             MeshMaterial2d(materials.add(drawer_info.color)),
+            DrawerEntity(id.clone()),
+        ));
+
+        commands.spawn((
+            Sprite::from_image(asset_server.load("ferris.png")),
+            Transform::from_xyz(drawer_info.pos.x, drawer_info.pos.y, 0.)
+                .with_scale(vec3(0.1, 0.1, 1.)),
             DrawerEntity(id.clone()),
         ));
     }
