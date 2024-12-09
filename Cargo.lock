@@ -2488,6 +2488,7 @@ dependencies = [
  "mlua",
  "mlua-sys",
  "once_cell",
+ "parking_lot",
  "rfd",
  "rmp-serde",
  "serde",
@@ -3369,6 +3370,7 @@ checksum = "07af8b9cdd281b7915f413fa73f29ebd5d55d0d3f0155584dade1ff18cea1b17"
 dependencies = [
  "autocfg",
  "scopeguard",
+ "serde",
 ]
 
 [[package]]

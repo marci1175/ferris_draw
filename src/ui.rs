@@ -6,13 +6,15 @@ use bevy_egui::{
 use miniz_oxide::deflate::CompressionLevel;
 use std::{
     fs,
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc},
 };
+
+use parking_lot::Mutex;
 
 use bevy::prelude::Resource;
 use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
-use indexmap::IndexMap;
+use indexmap::{map::MutableKeys, IndexMap};
 
 use crate::{Drawers, LuaRuntime};
 
@@ -29,6 +31,9 @@ pub struct UiState {
     #[serde(skip)]
     /// Should the new viewport open? NOTE: This egui backend doesnt support multiple viewports.
     pub code_manager_window: Arc<AtomicBool>,
+
+    #[serde(skip)]
+    rename_buffer: Arc<Mutex<String>>,
 
     /// The manager panel's tab state.
     pub item_manager: egui_tiles::Tree<ManagerPane>,
@@ -49,6 +54,7 @@ impl Default for UiState {
                 egui_tiles::Tree::new("manager_tree", tiles.insert_tab_tile(tileids), tiles)
             },
             toasts: Arc::new(Mutex::new(Toasts::new())),
+            rename_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
         }
     }
 }
@@ -74,6 +80,8 @@ pub struct ManagerBehavior {
 
     /// The field is used to display the current number of drawers.
     drawers: Drawers,
+
+    rename_buffer: Arc<Mutex<String>>,
 }
 
 impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
@@ -93,37 +101,59 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
 
                 ui.separator();
 
-                scripts.retain(|name, script| {
-                    let mut should_keep = true;
-                    ui.horizontal(|ui| {
-                        ui.label(name);
+                let scripts_clone = scripts.clone();
 
-                        if ui.button("Run").clicked() {
-                            let script = script.to_string();
-
-                            if let Err(err) = self.lua_runtime.load(script).exec() {
-                                self.toasts.lock().unwrap().add(
-                                    Toast::new()
-                                        .kind(egui_toast::ToastKind::Error)
-                                        .text(err.to_string()),
-                                );
-                            };
-                        }
-
-                        ui.push_id(name, |ui| {
-                            ui.collapsing("Settings", |ui| {
-                                ui.menu_button("Edit", |ui| {
-                                    ui.code_editor(script);
+                ScrollArea::both().show(ui, |ui| {
+                    scripts.retain2(|name, script| {
+                        let mut should_keep = true;
+                        ui.horizontal(|ui| {
+                            ui.label(name.clone());
+    
+                            if ui.button("Run").clicked() {
+                                let script = script.to_string();
+    
+                                if let Err(err) = self.lua_runtime.load(script).exec() {
+                                    self.toasts.lock().add(
+                                        Toast::new()
+                                            .kind(egui_toast::ToastKind::Error)
+                                            .text(err.to_string()),
+                                    );
+                                };
+                            }
+    
+                            ui.push_id(name.clone(), |ui| {
+                                ui.collapsing("Settings", |ui| {
+                                    ui.menu_button("Edit", |ui| {
+                                        ui.code_editor(script);
+                                    });
+    
+                                    if ui.button("Delete").clicked() {
+                                        should_keep = false;
+                                    }
+    
+                                    let menu_button = ui.menu_button("Rename script", |ui| {
+                                        ui.text_edit_singleline(&mut *self.rename_buffer.lock());
+    
+                                        if ui.button("Rename").clicked() {
+                                            let name_buffer = &*self.rename_buffer.lock();
+                                            if !scripts_clone.contains_key(name_buffer) {
+                                                *name = name_buffer.clone();
+                                            }
+                                            else {
+                                                self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Script with name {name_buffer} already exists.")));
+                                            }
+                                        }
+                                    });
+    
+                                    if menu_button.response.clicked() {
+                                        *self.rename_buffer.lock() = name.clone();
+                                    }
                                 });
-
-                                if ui.button("Delete").clicked() {
-                                    should_keep = false;
-                                }
                             });
                         });
+    
+                        should_keep
                     });
-
-                    should_keep
                 });
             }
             ManagerPane::ItemManager => {
@@ -176,7 +206,7 @@ pub fn main_ui(
 
     egui_extras::install_image_loaders(ctx);
 
-    ui_state.toasts.lock().unwrap().show(ctx);
+    ui_state.toasts.lock().show(ctx);
 
     bevy_egui::egui::TopBottomPanel::top("top_panel")
         .resizable(true)
@@ -190,7 +220,7 @@ pub fn main_ui(
                     if ui.button("Save project").clicked() {
                         if let Some(save_path) = rfd::FileDialog::new()
                             .set_file_name("new_save")
-                            .add_filter("Save file", &[".dat"])
+                            .add_filter("Save file", &["dat"])
                             .save_file()
                         {
                             let compressed_data = miniz_oxide::deflate::compress_to_vec(
@@ -199,7 +229,7 @@ pub fn main_ui(
                             );
 
                             if let Err(err) = fs::write(save_path, compressed_data) {
-                                ui_state.toasts.lock().unwrap().add(
+                                ui_state.toasts.lock().add(
                                     Toast::new()
                                         .kind(egui_toast::ToastKind::Error)
                                         .text(err.to_string()),
@@ -208,7 +238,32 @@ pub fn main_ui(
                         }
                     };
 
-                    if ui.button("Open project").clicked() {};
+                    if ui.button("Open project").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Save file", &["dat"])
+                            .save_file()
+                        {
+                            match fs::read(path) {
+                                Ok(read_bytes) => {
+                                    let decompressed_data =
+                                        miniz_oxide::inflate::decompress_to_vec(&read_bytes)
+                                            .unwrap();
+
+                                    let data: UiState =
+                                        rmp_serde::from_slice(&decompressed_data).unwrap();
+
+                                    *ui_state = data;
+                                }
+                                Err(_err) => {
+                                    ui_state.toasts.lock().add(
+                                        Toast::new()
+                                            .kind(egui_toast::ToastKind::Error)
+                                            .text(_err.to_string()),
+                                    );
+                                }
+                            }
+                        }
+                    };
                 });
             });
         });
@@ -225,12 +280,15 @@ pub fn main_ui(
 
                 let toasts = ui_state.toasts.clone();
 
+                let rename_buffer = ui_state.rename_buffer.clone();
+
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {
                         code_manager_window,
                         lua_runtime: lua_runtime.clone(),
                         toasts,
                         drawers: drawers.clone(),
+                        rename_buffer,
                     },
                     ui,
                 );

@@ -192,7 +192,6 @@ pub fn init_lua_functions(lua_rt: ResMut<LuaRuntime>, drawers_handle: Drawers) {
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
-
     // Resets the drawers position and angle.
     let center = lua_vm
         .create_function(move |_, id: String| {
