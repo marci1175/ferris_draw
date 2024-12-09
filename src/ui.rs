@@ -268,9 +268,9 @@ pub fn main_ui(
             });
         });
 
-    bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
-        .resizable(true)
-        .show(ctx, |ui| {});
+    // bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
+    //     .resizable(true)
+    //     .show(ctx, |ui| {});
 
     if ui_state.manager_panel {
         bevy_egui::egui::SidePanel::right("right_panel")
