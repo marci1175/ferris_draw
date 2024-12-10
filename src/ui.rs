@@ -166,30 +166,32 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                 });
             }
             ManagerPane::ItemManager => {
-                ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                    for drawer in self.drawers.iter() {
-                        let (id, drawer) = drawer.pair();
+                ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for drawer in self.drawers.iter() {
+                            let (id, drawer) = drawer.pair();
 
-                        ui.horizontal(|ui| {
-                            ui.image(egui::include_image!("../assets/ferris.png"));
-                            ui.label(id);
-                            ui.menu_button("Info", |ui| {
-                                ui.label(format!("Angle: {}°", drawer.ang.to_degrees() - 90.));
-                                ui.label(format!(
-                                    "Position: x: {} y: {}",
-                                    drawer.pos.x, drawer.pos.y
-                                ));
+                            ui.horizontal(|ui| {
+                                ui.image(egui::include_image!("../assets/ferris.png"));
+                                ui.label(id);
+                                ui.menu_button("Info", |ui| {
+                                    ui.label(format!("Angle: {}°", drawer.ang.to_degrees() - 90.));
+                                    ui.label(format!(
+                                        "Position: x: {} y: {}",
+                                        drawer.pos.x, drawer.pos.y
+                                    ));
 
-                                let color = drawer.color.to_linear();
+                                    let color = drawer.color.to_linear();
 
-                                ui.label(format!(
-                                    "Color: Red: {} Green: {} Blue: {} Alpha: {}",
-                                    color.red, color.green, color.blue, color.alpha
-                                ));
+                                    ui.label(format!(
+                                        "Color: Red: {} Green: {} Blue: {} Alpha: {}",
+                                        color.red, color.green, color.blue, color.alpha
+                                    ));
+                                });
                             });
-                        });
-                    }
-                });
+                        }
+                    });
             }
         }
 
@@ -307,7 +309,7 @@ pub fn main_ui(
                         drawers: drawers.clone(),
                         rename_buffer,
                     },
-                    ui
+                    ui,
                 );
             });
     }
