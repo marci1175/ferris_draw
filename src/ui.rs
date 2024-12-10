@@ -1,6 +1,6 @@
 use bevy::prelude::{Res, ResMut};
 use bevy_egui::{
-    egui::{self, ScrollArea},
+    egui::{self, vec2, Color32, Rect, ScrollArea, Sense, UiBuilder},
     EguiContexts,
 };
 use miniz_oxide::deflate::CompressionLevel;
@@ -9,7 +9,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use bevy::prelude::Resource;
 use egui_tiles::Tiles;
@@ -37,6 +37,14 @@ pub struct UiState {
 
     /// The manager panel's tab state.
     pub item_manager: egui_tiles::Tree<ManagerPane>,
+
+    pub script_line_prompts: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub enum ScriptLinePrompts {
+    UserInput(String),
+    ScriptOutput(String),
 }
 
 impl Default for UiState {
@@ -55,6 +63,7 @@ impl Default for UiState {
             },
             toasts: Arc::new(Mutex::new(Toasts::new())),
             rename_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
+            script_line_prompts: Arc::new(RwLock::new(vec![])),
         }
     }
 }
@@ -103,7 +112,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
 
                 let scripts_clone = scripts.clone();
 
-                ScrollArea::both().show(ui, |ui| {
+                ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                     scripts.retain2(|name, script| {
                         let mut should_keep = true;
                         ui.horizontal(|ui| {
@@ -157,7 +166,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                 });
             }
             ManagerPane::ItemManager => {
-                ScrollArea::vertical().show(ui, |ui| {
+                ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                     for drawer in self.drawers.iter() {
                         let (id, drawer) = drawer.pair();
 
@@ -268,9 +277,17 @@ pub fn main_ui(
             });
         });
 
-    // bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
-    //     .resizable(true)
-    //     .show(ctx, |ui| {});
+    bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
+        .resizable(true)
+        .show(ctx, |ui| {
+            let (_id, rect) = ui.allocate_space(vec2(ui.available_width(), 100.));
+
+            ui.painter().rect_filled(rect, 5.0, Color32::BLACK);
+
+            ui.allocate_new_ui(UiBuilder::new().max_rect(rect.shrink(10.)), |ui| {
+                ui.label("Teszt");
+            });
+        });
 
     if ui_state.manager_panel {
         bevy_egui::egui::SidePanel::right("right_panel")
@@ -290,7 +307,7 @@ pub fn main_ui(
                         drawers: drawers.clone(),
                         rename_buffer,
                     },
-                    ui,
+                    ui
                 );
             });
     }
