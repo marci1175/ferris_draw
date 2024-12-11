@@ -1,6 +1,6 @@
 use bevy::prelude::{Res, ResMut};
 use bevy_egui::{
-    egui::{self, vec2, Color32, Rect, ScrollArea, Sense, UiBuilder},
+    egui::{self, vec2, Color32, Key, Layout, Rect, RichText, ScrollArea, Sense, UiBuilder},
     EguiContexts,
 };
 use miniz_oxide::deflate::CompressionLevel;
@@ -16,7 +16,7 @@ use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
 use indexmap::{map::MutableKeys, IndexMap};
 
-use crate::{Drawers, LuaRuntime};
+use crate::{Drawers, LuaRuntime, ScriptLinePrompts};
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -35,16 +35,17 @@ pub struct UiState {
     #[serde(skip)]
     rename_buffer: Arc<Mutex<String>>,
 
+    #[serde(skip)]
+    name_buffer: Arc<Mutex<String>>,
+
+    #[serde(skip)]
+    command_line_buffer: String,
+
     /// The manager panel's tab state.
     pub item_manager: egui_tiles::Tree<ManagerPane>,
 
-    pub script_line_prompts: Arc<RwLock<Vec<ScriptLinePrompts>>>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub enum ScriptLinePrompts {
-    UserInput(String),
-    ScriptOutput(String),
+    #[serde(skip)]
+    pub command_line_outputs: Arc<RwLock<Vec<ScriptLinePrompts>>>,
 }
 
 impl Default for UiState {
@@ -63,7 +64,9 @@ impl Default for UiState {
             },
             toasts: Arc::new(Mutex::new(Toasts::new())),
             rename_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
-            script_line_prompts: Arc::new(RwLock::new(vec![])),
+            name_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
+            command_line_outputs: Arc::new(RwLock::new(vec![])),
+            command_line_buffer: String::new(),
         }
     }
 }
@@ -90,6 +93,8 @@ pub struct ManagerBehavior {
     /// The field is used to display the current number of drawers.
     drawers: Drawers,
 
+    name_buffer: Arc<Mutex<String>>,
+
     rename_buffer: Arc<Mutex<String>>,
 }
 
@@ -102,10 +107,27 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
     ) -> egui_tiles::UiResponse {
         match pane {
             ManagerPane::Scripts(scripts) => {
-                ui.horizontal(|ui| {
-                    if ui.button("Add").clicked() {
-                        scripts.insert(format!("script{}", scripts.len()), String::from(""));
-                    }
+                ui.allocate_space(vec2(ui.available_width(), 2.));
+
+                ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        let add_button = ui.button("Add");
+                        
+                        if add_button.clicked() {
+                            let name_buffer = &mut *self.name_buffer.lock();
+
+                            if !scripts.contains_key(&*name_buffer) {
+                                scripts.insert(name_buffer.clone(), String::from(""));
+                                
+                                name_buffer.clear();
+                            }
+                            else {
+                                self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("The script named: {name_buffer} already exists. Please choose another name or rename an existing script.")));
+                            }
+                        }
+
+                        ui.text_edit_singleline(&mut *self.name_buffer.lock());
+                    });
                 });
 
                 ui.separator();
@@ -282,12 +304,73 @@ pub fn main_ui(
     bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
         .resizable(true)
         .show(ctx, |ui| {
-            let (_id, rect) = ui.allocate_space(vec2(ui.available_width(), 100.));
+            let (_id, rect) = ui.allocate_space(vec2(ui.available_width(), 170.));
 
             ui.painter().rect_filled(rect, 5.0, Color32::BLACK);
 
             ui.allocate_new_ui(UiBuilder::new().max_rect(rect.shrink(10.)), |ui| {
-                ui.label("Teszt");
+                ScrollArea::both().auto_shrink([false, false]).max_height(130.).stick_to_bottom(true).show(ui, |ui| {
+                        for output in ui_state.command_line_outputs.read().iter() {
+                            match output {
+                                ScriptLinePrompts::UserInput(text) => {
+                                    ui.label(RichText::from(format!("> {text}")).color(Color32::GRAY));
+                                }
+                                ScriptLinePrompts::Standard(text) => {
+                                    ui.label(RichText::from(text).color(Color32::WHITE));
+                                }
+                                ScriptLinePrompts::Error(text) => {
+                                    ui.label(RichText::from(text).color(Color32::RED));
+                                }
+                            }
+                        }
+                });
+                ui.horizontal(|ui| {
+                    let text_edit = ui.text_edit_singleline(&mut ui_state.command_line_buffer);
+
+                    if text_edit.has_focus() {
+                        if ctx.input(|reader| reader.key_pressed(Key::Enter)) {
+                            ui_state.command_line_outputs.write().push(
+                                ScriptLinePrompts::UserInput(ui_state.command_line_buffer.clone()),
+                            );
+                            match lua_runtime
+                                .load(ui_state.command_line_buffer.clone())
+                                .exec()
+                            {
+                                Ok(_output) => (),
+                                Err(_err) => {
+                                    ui_state
+                                        .command_line_outputs
+                                        .write()
+                                        .push(ScriptLinePrompts::Error(_err.to_string()));
+                                }
+                            }
+                            ui_state.command_line_buffer.clear();
+                        }
+                    }
+
+                    if ui.button("Execute").clicked() {
+                        ui_state
+                            .command_line_outputs
+                            .write()
+                            .push(ScriptLinePrompts::UserInput(
+                                ui_state.command_line_buffer.clone(),
+                            ));
+                        match lua_runtime
+                            .load(ui_state.command_line_buffer.clone())
+                            .exec()
+                        {
+                            Ok(_output) => (),
+                            Err(_err) => {
+                                ui_state
+                                    .command_line_outputs
+                                    .write()
+                                    .push(ScriptLinePrompts::Error(_err.to_string()));
+                            }
+                        }
+
+                        ui_state.command_line_buffer.clear();
+                    };
+                });
             });
         });
 
@@ -300,6 +383,7 @@ pub fn main_ui(
                 let toasts = ui_state.toasts.clone();
 
                 let rename_buffer = ui_state.rename_buffer.clone();
+                let name_buffer = ui_state.name_buffer.clone();
 
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {
@@ -308,6 +392,7 @@ pub fn main_ui(
                         toasts,
                         drawers: drawers.clone(),
                         rename_buffer,
+                        name_buffer,
                     },
                     ui,
                 );

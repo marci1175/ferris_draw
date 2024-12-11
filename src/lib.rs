@@ -14,6 +14,7 @@ use bevy::{
 pub mod ui;
 use dashmap::DashMap;
 use mlua::Lua;
+use parking_lot::RwLock;
 
 #[derive(Resource, Clone)]
 pub struct LuaRuntime(pub Lua);
@@ -38,6 +39,13 @@ impl DerefMut for LuaRuntime {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub enum ScriptLinePrompts {
+    UserInput(String),
+    Standard(String),
+    Error(String),
 }
 
 #[derive(Component)]
@@ -143,8 +151,20 @@ impl DerefMut for Drawers {
 
 /// Create a valid* [`Lua`] runtime.
 /// This function automaticly adds all the functions to the global variables.
-pub fn init_lua_functions(lua_rt: ResMut<LuaRuntime>, drawers_handle: Drawers) {
+pub fn init_lua_functions(
+    lua_rt: ResMut<LuaRuntime>,
+    drawers_handle: Drawers,
+    output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+) {
     let lua_vm = lua_rt.clone();
+
+    let print = lua_vm
+        .create_function(move |_, msg: String| {
+            output_list.write().push(ScriptLinePrompts::Standard(msg));
+
+            Ok(())
+        })
+        .unwrap();
 
     let drawers_clone = drawers_handle.clone();
 
@@ -301,4 +321,5 @@ pub fn init_lua_functions(lua_rt: ResMut<LuaRuntime>, drawers_handle: Drawers) {
     lua_vm.globals().set("forward", forward).unwrap();
     lua_vm.globals().set("center", center).unwrap();
     lua_vm.globals().set("color", color).unwrap();
+    lua_vm.globals().set("print", print).unwrap();
 }

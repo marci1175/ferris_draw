@@ -60,7 +60,7 @@ fn setup(
         Ok(read_bytes) => {
             let decompressed_data = miniz_oxide::inflate::decompress_to_vec(&read_bytes).unwrap();
 
-            let data: UiState = rmp_serde::from_slice(&decompressed_data).unwrap();
+            let data: UiState = rmp_serde::from_slice(&decompressed_data).unwrap_or_default();
 
             *ui_state = data;
         }
@@ -71,7 +71,11 @@ fn setup(
 
     commands.spawn(Camera2d);
 
-    init_lua_functions(lua_runtime, drawers.clone());
+    init_lua_functions(
+        lua_runtime,
+        drawers.clone(),
+        ui_state.command_line_outputs.clone(),
+    );
 }
 
 fn exit_handler(exit_events: EventReader<AppExit>, ui_state: Res<UiState>) {
