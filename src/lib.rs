@@ -19,30 +19,37 @@ use parking_lot::RwLock;
 #[derive(Resource, Clone)]
 pub struct LuaRuntime(pub Lua);
 
-impl Default for LuaRuntime {
-    fn default() -> Self {
+impl Default for LuaRuntime
+{
+    fn default() -> Self
+    {
         Self(unsafe { Lua::unsafe_new() })
     }
 }
 
 /// Implement dereferencing for LuaRuntime so that I wouldnt have to call .0 everytime i want to access the inner value.
-impl Deref for LuaRuntime {
+impl Deref for LuaRuntime
+{
     type Target = Lua;
 
-    fn deref(&self) -> &Self::Target {
+    fn deref(&self) -> &Self::Target
+    {
         &self.0
     }
 }
 
 /// Implement dereferencing for LuaRuntime so that I wouldnt have to call .0 everytime i want to access the inner value.
-impl DerefMut for LuaRuntime {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+impl DerefMut for LuaRuntime
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
         &mut self.0
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub enum ScriptLinePrompts {
+pub enum ScriptLinePrompts
+{
     UserInput(String),
     Standard(String),
     Error(String),
@@ -53,18 +60,23 @@ pub struct DrawerEntity(pub String);
 
 /// A list of points that will have a line drawn between each consecutive points
 #[derive(Debug, Clone, Default)]
-pub struct LineStrip {
+pub struct LineStrip
+{
     pub points: Vec<(Vec3, Color)>,
 }
 
-impl LineStrip {
-    pub fn new(points: Vec<(Vec3, Color)>) -> Self {
+impl LineStrip
+{
+    pub fn new(points: Vec<(Vec3, Color)>) -> Self
+    {
         Self { points }
     }
 }
 
-impl From<LineStrip> for Mesh {
-    fn from(line: LineStrip) -> Self {
+impl From<LineStrip> for Mesh
+{
+    fn from(line: LineStrip) -> Self
+    {
         Mesh::new(
             // This tells wgpu that the positions are a list of points
             // where a line will be drawn between each consecutive point
@@ -89,7 +101,8 @@ impl From<LineStrip> for Mesh {
     }
 }
 
-pub fn color_into_vec4(color: Color) -> Vec4 {
+pub fn color_into_vec4(color: Color) -> Vec4
+{
     Vec4::new(
         color.to_linear().red,
         color.to_linear().green,
@@ -100,7 +113,8 @@ pub fn color_into_vec4(color: Color) -> Vec4 {
 
 /// The information of the Drawer
 #[derive(Resource, Debug)]
-pub struct Drawer {
+pub struct Drawer
+{
     /// The position of the Drawer.
     pub pos: Vec2,
 
@@ -114,8 +128,10 @@ pub struct Drawer {
     pub color: Color,
 }
 
-impl Default for Drawer {
-    fn default() -> Self {
+impl Default for Drawer
+{
+    fn default() -> Self
+    {
         Self {
             pos: Vec2::default(),
             ang: Angle::from_degrees(90.),
@@ -134,17 +150,21 @@ impl Default for Drawer {
 pub struct Drawers(pub Arc<DashMap<String, Drawer>>);
 
 /// Implement dereferencing for the [`Drawers`] type.
-impl Deref for Drawers {
+impl Deref for Drawers
+{
     type Target = Arc<DashMap<String, Drawer>>;
 
-    fn deref(&self) -> &Self::Target {
+    fn deref(&self) -> &Self::Target
+    {
         &self.0
     }
 }
 
 /// Implement mutable dereferencing for the [`Drawers`] type.
-impl DerefMut for Drawers {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+impl DerefMut for Drawers
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
         &mut self.0
     }
 }
@@ -155,7 +175,8 @@ pub fn init_lua_functions(
     lua_rt: ResMut<LuaRuntime>,
     drawers_handle: Drawers,
     output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
-) {
+)
+{
     let lua_vm = lua_rt.clone();
 
     let print = lua_vm
@@ -198,13 +219,13 @@ pub fn init_lua_functions(
                 Some(mut drawer) => {
                     // Set the drawer's angle.
                     drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + degrees);
-                }
+                },
                 None => {
                     // Return the error
                     return Err(mlua::Error::RuntimeError(format!(
                         "The drawer with handle {id} doesn't exist."
                     )));
-                }
+                },
             }
 
             Ok(())
@@ -224,12 +245,12 @@ pub fn init_lua_functions(
                     drawer.pos = Vec2::default();
                     //Reset the drawer's angle.
                     drawer.ang = Angle::from_degrees(90.);
-                }
+                },
                 None => {
                     return Err(mlua::Error::RuntimeError(format!(
                         "The drawer with handle {id} doesn't exist."
                     )));
-                }
+                },
             }
 
             Ok(())
@@ -251,13 +272,13 @@ pub fn init_lua_functions(
                 Some(mut drawer) => {
                     // Set the drawer's color
                     drawer.color = Color::linear_rgba(red, green, blue, alpha);
-                }
+                },
                 None => {
                     // Return the error
                     return Err(mlua::Error::RuntimeError(format!(
                         "The drawer with handle {id} doesn't exist."
                     )));
-                }
+                },
             }
 
             Ok(())
@@ -302,13 +323,13 @@ pub fn init_lua_functions(
 
                     //Set the new drawers position.
                     drawer.pos = Vec2::new(x, y);
-                }
+                },
                 None => {
                     //Reset the drawer's position
                     return Err(mlua::Error::RuntimeError(format!(
                         "The drawer with handle {id} doesn't exist."
                     )));
-                }
+                },
             }
 
             Ok(())

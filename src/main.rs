@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use bevy::prelude::PluginGroup;
-use bevy::window::{Window, WindowPlugin};
+use bevy::{
+    prelude::PluginGroup,
+    window::{Window, WindowPlugin},
+};
 use std::{fs, path::PathBuf};
 // hide console window on Windows in release
 use bevy::{
@@ -23,7 +25,8 @@ use ferris_draw::{
 use miniz_oxide::deflate::CompressionLevel;
 
 #[tokio::main]
-async fn main() {
+async fn main()
+{
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -49,7 +52,8 @@ fn setup(
     drawers: Res<Drawers>,
     mut ui_state: ResMut<UiState>,
     lua_runtime: ResMut<LuaRuntime>,
-) {
+)
+{
     //Load in save
     let mut app_data_path = PathBuf::from(env!("APPDATA"));
 
@@ -63,10 +67,10 @@ fn setup(
             let data: UiState = rmp_serde::from_slice(&decompressed_data).unwrap_or_default();
 
             *ui_state = data;
-        }
+        },
         Err(_err) => {
             //The save didnt exist
-        }
+        },
     }
 
     commands.spawn(Camera2d);
@@ -78,7 +82,8 @@ fn setup(
     );
 }
 
-fn exit_handler(exit_events: EventReader<AppExit>, ui_state: Res<UiState>) {
+fn exit_handler(exit_events: EventReader<AppExit>, ui_state: Res<UiState>)
+{
     // This indicated that the app has been closed
     if !exit_events.is_empty() {
         let mut app_data_path = PathBuf::from(env!("APPDATA"));
@@ -104,7 +109,8 @@ fn draw(
     mut materials: ResMut<Assets<ColorMaterial>>,
     drawers: Res<Drawers>,
     asset_server: Res<AssetServer>,
-) {
+)
+{
     for drawer in drawers.iter() {
         let (id, drawer_info) = drawer.pair();
 
@@ -125,7 +131,8 @@ fn draw(
     }
 }
 
-fn clear_screen(mut commands: Commands, entities: Query<Entity, With<DrawerEntity>>) {
+fn clear_screen(mut commands: Commands, entities: Query<Entity, With<DrawerEntity>>)
+{
     for entity in entities.iter() {
         commands.entity(entity).despawn();
     }

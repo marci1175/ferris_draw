@@ -1,4 +1,7 @@
-use bevy::prelude::{Res, ResMut};
+use bevy::{
+    color::palettes::css::WHITE,
+    prelude::{Res, ResMut},
+};
 use bevy_egui::{
     egui::{self, vec2, Color32, Key, Layout, Rect, RichText, ScrollArea, Sense, UiBuilder},
     EguiContexts,
@@ -20,7 +23,8 @@ use crate::{Drawers, LuaRuntime, ScriptLinePrompts};
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct UiState {
+pub struct UiState
+{
     /// Should the manager panel open.
     pub manager_panel: bool,
 
@@ -48,8 +52,10 @@ pub struct UiState {
     pub command_line_outputs: Arc<RwLock<Vec<ScriptLinePrompts>>>,
 }
 
-impl Default for UiState {
-    fn default() -> Self {
+impl Default for UiState
+{
+    fn default() -> Self
+    {
         Self {
             manager_panel: Default::default(),
             code_manager_window: Default::default(),
@@ -73,14 +79,16 @@ impl Default for UiState {
 
 /// The manager panel's tabs.
 #[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
-pub enum ManagerPane {
+pub enum ManagerPane
+{
     Scripts(IndexMap<String, String>),
     #[default]
     ItemManager,
 }
 
 /// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
-pub struct ManagerBehavior {
+pub struct ManagerBehavior
+{
     /// Should the new viewport open? NOTE: This egui backend doesnt support multiple viewports.
     pub code_manager_window: Arc<AtomicBool>,
 
@@ -98,13 +106,15 @@ pub struct ManagerBehavior {
     rename_buffer: Arc<Mutex<String>>,
 }
 
-impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
+impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
+{
     fn pane_ui(
         &mut self,
         ui: &mut bevy_egui::egui::Ui,
         _tile_id: egui_tiles::TileId,
         pane: &mut ManagerPane,
-    ) -> egui_tiles::UiResponse {
+    ) -> egui_tiles::UiResponse
+    {
         match pane {
             ManagerPane::Scripts(scripts) => {
                 ui.allocate_space(vec2(ui.available_width(), 2.));
@@ -112,13 +122,11 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                 ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
                     ui.horizontal_centered(|ui| {
                         let add_button = ui.button("Add");
-                        
                         if add_button.clicked() {
                             let name_buffer = &mut *self.name_buffer.lock();
 
                             if !scripts.contains_key(&*name_buffer) {
                                 scripts.insert(name_buffer.clone(), String::from(""));
-                                
                                 name_buffer.clear();
                             }
                             else {
@@ -139,10 +147,8 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                         let mut should_keep = true;
                         ui.horizontal(|ui| {
                             ui.label(name.clone());
-    
                             if ui.button("Run").clicked() {
                                 let script = script.to_string();
-    
                                 if let Err(err) = self.lua_runtime.load(script).exec() {
                                     self.toasts.lock().add(
                                         Toast::new()
@@ -151,20 +157,16 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                                     );
                                 };
                             }
-    
                             ui.push_id(name.clone(), |ui| {
                                 ui.collapsing("Settings", |ui| {
                                     ui.menu_button("Edit", |ui| {
                                         ui.code_editor(script);
                                     });
-    
                                     if ui.button("Delete").clicked() {
                                         should_keep = false;
                                     }
-    
                                     let menu_button = ui.menu_button("Rename script", |ui| {
                                         ui.text_edit_singleline(&mut *self.rename_buffer.lock());
-    
                                         if ui.button("Rename").clicked() {
                                             let name_buffer = &*self.rename_buffer.lock();
                                             if !scripts_clone.contains_key(name_buffer) {
@@ -175,18 +177,16 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                                             }
                                         }
                                     });
-    
                                     if menu_button.response.clicked() {
                                         *self.rename_buffer.lock() = name.clone();
                                     }
                                 });
                             });
                         });
-    
                         should_keep
                     });
                 });
-            }
+            },
             ManagerPane::ItemManager => {
                 ScrollArea::both()
                     .auto_shrink([false, false])
@@ -214,13 +214,14 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior {
                             });
                         }
                     });
-            }
+            },
         }
 
         Default::default()
     }
 
-    fn tab_title_for_pane(&mut self, pane: &ManagerPane) -> bevy_egui::egui::WidgetText {
+    fn tab_title_for_pane(&mut self, pane: &ManagerPane) -> bevy_egui::egui::WidgetText
+    {
         match pane {
             ManagerPane::Scripts(scripts) => format!("Scripts: {}", scripts.len()),
             ManagerPane::ItemManager => "Items".to_string(),
@@ -234,7 +235,8 @@ pub fn main_ui(
     mut contexts: EguiContexts<'_, '_>,
     lua_runtime: ResMut<LuaRuntime>,
     drawers: Res<Drawers>,
-) {
+)
+{
     let ctx = contexts.ctx_mut();
 
     egui_extras::install_image_loaders(ctx);
@@ -286,14 +288,14 @@ pub fn main_ui(
                                         rmp_serde::from_slice(&decompressed_data).unwrap();
 
                                     *ui_state = data;
-                                }
+                                },
                                 Err(_err) => {
                                     ui_state.toasts.lock().add(
                                         Toast::new()
                                             .kind(egui_toast::ToastKind::Error)
                                             .text(_err.to_string()),
                                     );
-                                }
+                                },
                             }
                         }
                     };
@@ -309,67 +311,77 @@ pub fn main_ui(
             ui.painter().rect_filled(rect, 5.0, Color32::BLACK);
 
             ui.allocate_new_ui(UiBuilder::new().max_rect(rect.shrink(10.)), |ui| {
-                ScrollArea::both().auto_shrink([false, false]).max_height(130.).stick_to_bottom(true).show(ui, |ui| {
+                ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .max_height(120.)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
                         for output in ui_state.command_line_outputs.read().iter() {
                             match output {
                                 ScriptLinePrompts::UserInput(text) => {
-                                    ui.label(RichText::from(format!("> {text}")).color(Color32::GRAY));
-                                }
+                                    ui.label(
+                                        RichText::from(format!("> {text}")).color(Color32::GRAY),
+                                    );
+                                },
                                 ScriptLinePrompts::Standard(text) => {
                                     ui.label(RichText::from(text).color(Color32::WHITE));
-                                }
+                                },
                                 ScriptLinePrompts::Error(text) => {
                                     ui.label(RichText::from(text).color(Color32::RED));
-                                }
+                                },
                             }
                         }
-                });
-                ui.horizontal(|ui| {
-                    let text_edit = ui.text_edit_singleline(&mut ui_state.command_line_buffer);
+                    });
+                ui.horizontal_centered(|ui| {
+                    ui.group(|ui| {
+                        // Indicate the terminal input.
+                        ui.label(RichText::from("$>").color(Color32::WHITE));
 
-                    if text_edit.has_focus() {
-                        if ctx.input(|reader| reader.key_pressed(Key::Enter)) {
-                            ui_state.command_line_outputs.write().push(
-                                ScriptLinePrompts::UserInput(ui_state.command_line_buffer.clone()),
-                            );
-                            match lua_runtime
-                                .load(ui_state.command_line_buffer.clone())
-                                .exec()
+                        // Get key input before spawning the text editor, because that consumes the enter key.
+                        let enter_was_pressed = ctx.input_mut(|reader| {
+                            reader.consume_key(egui::Modifiers::NONE, Key::Enter)
+                        });
+
+                        // Create text editor
+                        let text_edit = ui.add(
+                            egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
+                                .frame(false)
+                                .code_editor()
+                                .desired_width(ui.available_size_before_wrap().x)
+                                .hint_text(RichText::from("lua command").italics()),
+                        );
+
+                        // If the enter was pressed and the text editor was in focus execute the code written in the terminal.
+                        if enter_was_pressed && text_edit.has_focus() {
+                            if ui_state.command_line_buffer.clone() == "cls"
+                                || ui_state.command_line_buffer.clone() == "clear"
                             {
-                                Ok(_output) => (),
-                                Err(_err) => {
-                                    ui_state
-                                        .command_line_outputs
-                                        .write()
-                                        .push(ScriptLinePrompts::Error(_err.to_string()));
+                                ui_state.command_line_outputs.write().clear();
+                            }
+                            else {
+                                ui_state.command_line_outputs.write().push(
+                                    ScriptLinePrompts::UserInput(
+                                        ui_state.command_line_buffer.clone(),
+                                    ),
+                                );
+                                match lua_runtime
+                                    .load(ui_state.command_line_buffer.clone())
+                                    .exec()
+                                {
+                                    Ok(_output) => (),
+                                    Err(_err) => {
+                                        ui_state
+                                            .command_line_outputs
+                                            .write()
+                                            .push(ScriptLinePrompts::Error(_err.to_string()));
+                                    },
                                 }
                             }
+
+                            // Clear out the buffer regardless of the command being used.
                             ui_state.command_line_buffer.clear();
                         }
-                    }
-
-                    if ui.button("Execute").clicked() {
-                        ui_state
-                            .command_line_outputs
-                            .write()
-                            .push(ScriptLinePrompts::UserInput(
-                                ui_state.command_line_buffer.clone(),
-                            ));
-                        match lua_runtime
-                            .load(ui_state.command_line_buffer.clone())
-                            .exec()
-                        {
-                            Ok(_output) => (),
-                            Err(_err) => {
-                                ui_state
-                                    .command_line_outputs
-                                    .write()
-                                    .push(ScriptLinePrompts::Error(_err.to_string()));
-                            }
-                        }
-
-                        ui_state.command_line_buffer.clear();
-                    };
+                    });
                 });
             });
         });
