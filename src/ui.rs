@@ -8,6 +8,7 @@ use bevy_egui::{
 };
 use miniz_oxide::deflate::CompressionLevel;
 use std::{
+    collections::VecDeque,
     fs,
     sync::{atomic::AtomicBool, Arc},
 };
@@ -50,6 +51,12 @@ pub struct UiState
 
     #[serde(skip)]
     pub command_line_outputs: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+
+    #[serde(skip)]
+    pub command_line_inputs: VecDeque<String>,
+
+    #[serde(skip)]
+    pub command_line_input_index: usize,
 }
 
 impl Default for UiState
@@ -73,6 +80,8 @@ impl Default for UiState
             name_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
             command_line_outputs: Arc::new(RwLock::new(vec![])),
             command_line_buffer: String::new(),
+            command_line_inputs: VecDeque::new(),
+            command_line_input_index: 0,
         }
     }
 }
@@ -342,6 +351,14 @@ pub fn main_ui(
                             reader.consume_key(egui::Modifiers::NONE, Key::Enter)
                         });
 
+                        let up_was_pressed = ctx.input_mut(|reader| {
+                            reader.consume_key(egui::Modifiers::NONE, Key::ArrowUp)
+                        });
+
+                        let down_was_pressed = ctx.input_mut(|reader| {
+                            reader.consume_key(egui::Modifiers::NONE, Key::ArrowDown)
+                        });
+
                         // Create text editor
                         let text_edit = ui.add(
                             egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
@@ -351,35 +368,83 @@ pub fn main_ui(
                                 .hint_text(RichText::from("lua command").italics()),
                         );
 
-                        // If the enter was pressed and the text editor was in focus execute the code written in the terminal.
-                        if enter_was_pressed && text_edit.has_focus() {
-                            if ui_state.command_line_buffer.clone() == "cls"
-                                || ui_state.command_line_buffer.clone() == "clear"
-                            {
-                                ui_state.command_line_outputs.write().clear();
+                        // Only take keyobard inputs, when the text editor has focus
+                        if text_edit.has_focus() {
+                            if enter_was_pressed {
+                                let command_line_buffer = ui_state.command_line_buffer.clone();
+
+                                if command_line_buffer == "cls" || command_line_buffer == "clear" {
+                                    ui_state.command_line_outputs.write().clear();
+                                }
+                                else {
+                                    ui_state.command_line_outputs.write().push(
+                                        ScriptLinePrompts::UserInput(command_line_buffer.clone()),
+                                    );
+                                    match lua_runtime.load(command_line_buffer.clone()).exec() {
+                                        Ok(_output) => (),
+                                        Err(_err) => {
+                                            ui_state
+                                                .command_line_outputs
+                                                .write()
+                                                .push(ScriptLinePrompts::Error(_err.to_string()));
+                                        },
+                                    }
+                                }
+
+                                if !command_line_buffer.is_empty() {
+                                    //Store the command used
+                                    ui_state
+                                        .command_line_inputs
+                                        .push_front(command_line_buffer.clone());
+                                }
+
+                                // Clear out the buffer regardless of the command being used.
+                                ui_state.command_line_buffer.clear();
                             }
-                            else {
-                                ui_state.command_line_outputs.write().push(
-                                    ScriptLinePrompts::UserInput(
-                                        ui_state.command_line_buffer.clone(),
-                                    ),
-                                );
-                                match lua_runtime
-                                    .load(ui_state.command_line_buffer.clone())
-                                    .exec()
-                                {
-                                    Ok(_output) => (),
-                                    Err(_err) => {
-                                        ui_state
-                                            .command_line_outputs
-                                            .write()
-                                            .push(ScriptLinePrompts::Error(_err.to_string()));
-                                    },
+
+                            if up_was_pressed {
+                                if ui_state.command_line_inputs.is_empty() {
+                                    return;
+                                }
+
+                                if ui_state.command_line_input_index == 0 {
+                                    ui_state.command_line_buffer =
+                                        ui_state.command_line_inputs[0].clone();
+
+                                    ui_state.command_line_input_index += 1;
+                                }
+                                else {
+                                    if ui_state.command_line_input_index as i32
+                                        <= ui_state.command_line_inputs.len() as i32 - 1
+                                    {
+                                        ui_state.command_line_buffer = ui_state.command_line_inputs
+                                            [ui_state.command_line_input_index]
+                                            .clone();
+                                        ui_state.command_line_input_index += 1;
+                                    }
                                 }
                             }
 
-                            // Clear out the buffer regardless of the command being used.
-                            ui_state.command_line_buffer.clear();
+                            if down_was_pressed {
+                                if ui_state.command_line_input_index
+                                    == ui_state.command_line_inputs.len()
+                                {
+                                    ui_state.command_line_buffer = ui_state.command_line_inputs
+                                        [ui_state.command_line_input_index - 2]
+                                        .clone();
+                                    ui_state.command_line_input_index -= 2;
+                                }
+                                else if ui_state.command_line_input_index > 0 {
+                                    ui_state.command_line_input_index -= 1;
+
+                                    ui_state.command_line_buffer = ui_state.command_line_inputs
+                                        [ui_state.command_line_input_index]
+                                        .clone();
+                                }
+                                else {
+                                    ui_state.command_line_buffer.clear();
+                                }
+                            }
                         }
                     });
                 });
