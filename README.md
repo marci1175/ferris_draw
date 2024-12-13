@@ -1,6 +1,10 @@
 ## Ferris draw
 - An educational tool aimed to teach the basics of programming to children.
 
+<p align="center">
+  <img src="https://github.com/marci1175/ferris_draw/blob/master/assets/icon.png" alt="Application Icon" width="400">
+</p>
+
 ### Project
 - This project was originally an [Imagine Logo](https://imagine.input.sk/international.html) port to rust.
 - The reason I am creating this project is because I had a ton of fun with it when I was in elemntary school learning about this.
