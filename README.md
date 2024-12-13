@@ -1,8 +1,8 @@
 ## Ferris draw
 - An educational tool aimed for teaching the basics of programming to children.
 ### Project
-This project was originally an [Imagine Logo](https://imagine.input.sk/international.html) port to rust.
-The reason I am creating this project is because I had a ton of fun with it when I was in elemntary school learning about this.
+- This project was originally an [Imagine Logo](https://imagine.input.sk/international.html) port to rust.
+- The reason I am creating this project is because I had a ton of fun with it when I was in elemntary school learning about this.
 
 ### Project Features
 - The project uses [lua](https://www.lua.org/) as its programming language, with [mlua](https://github.com/mlua-rs/mlua).
