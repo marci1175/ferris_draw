@@ -29,13 +29,12 @@ pub struct UiState
     /// Should the manager panel open.
     pub manager_panel: bool,
 
+    /// Should the command panel open.
+    pub command_panel: bool,
+
     /// Egui notifications
     #[serde(skip)]
     toasts: Arc<Mutex<Toasts>>,
-
-    #[serde(skip)]
-    /// Should the new viewport open? NOTE: This egui backend doesnt support multiple viewports.
-    pub code_manager_window: Arc<AtomicBool>,
 
     #[serde(skip)]
     rename_buffer: Arc<Mutex<String>>,
@@ -64,8 +63,8 @@ impl Default for UiState
     fn default() -> Self
     {
         Self {
-            manager_panel: Default::default(),
-            code_manager_window: Default::default(),
+            command_panel: false,
+            manager_panel: false,
             item_manager: {
                 let mut tiles = Tiles::default();
                 let mut tileids = vec![];
@@ -98,9 +97,6 @@ pub enum ManagerPane
 /// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
 pub struct ManagerBehavior
 {
-    /// Should the new viewport open? NOTE: This egui backend doesnt support multiple viewports.
-    pub code_manager_window: Arc<AtomicBool>,
-
     /// The [`mlua::Lua`] runtime handle, this can be used to run code on.
     pub lua_runtime: LuaRuntime,
 
@@ -256,10 +252,6 @@ pub fn main_ui(
         .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Manager").clicked() {
-                    ui_state.manager_panel = !ui_state.manager_panel;
-                }
-
                 ui.menu_button("File", |ui| {
                     if ui.button("Save project").clicked() {
                         if let Some(save_path) = rfd::FileDialog::new()
@@ -285,7 +277,7 @@ pub fn main_ui(
                     if ui.button("Open project").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Save file", &["dat"])
-                            .save_file()
+                            .pick_file()
                         {
                             match fs::read(path) {
                                 Ok(read_bytes) => {
@@ -309,154 +301,169 @@ pub fn main_ui(
                         }
                     };
                 });
-            });
-        });
 
-    bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
-        .resizable(true)
-        .show(ctx, |ui| {
-            let (_id, rect) = ui.allocate_space(vec2(ui.available_width(), 170.));
-
-            ui.painter().rect_filled(rect, 5.0, Color32::BLACK);
-
-            ui.allocate_new_ui(UiBuilder::new().max_rect(rect.shrink(10.)), |ui| {
-                ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .max_height(120.)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for output in ui_state.command_line_outputs.read().iter() {
-                            match output {
-                                ScriptLinePrompts::UserInput(text) => {
-                                    ui.label(
-                                        RichText::from(format!("> {text}")).color(Color32::GRAY),
-                                    );
-                                },
-                                ScriptLinePrompts::Standard(text) => {
-                                    ui.label(RichText::from(text).color(Color32::WHITE));
-                                },
-                                ScriptLinePrompts::Error(text) => {
-                                    ui.label(RichText::from(text).color(Color32::RED));
-                                },
-                            }
-                        }
-                    });
-                ui.horizontal_centered(|ui| {
-                    ui.group(|ui| {
-                        // Indicate the terminal input.
-                        ui.label(RichText::from("$>").color(Color32::WHITE));
-
-                        // Get key input before spawning the text editor, because that consumes the enter key.
-                        let enter_was_pressed = ctx.input_mut(|reader| {
-                            reader.consume_key(egui::Modifiers::NONE, Key::Enter)
-                        });
-
-                        let up_was_pressed = ctx.input_mut(|reader| {
-                            reader.consume_key(egui::Modifiers::NONE, Key::ArrowUp)
-                        });
-
-                        let down_was_pressed = ctx.input_mut(|reader| {
-                            reader.consume_key(egui::Modifiers::NONE, Key::ArrowDown)
-                        });
-
-                        // Create text editor
-                        let text_edit = ui.add(
-                            egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
-                                .frame(false)
-                                .code_editor()
-                                .desired_width(ui.available_size_before_wrap().x)
-                                .hint_text(RichText::from("lua command").italics()),
-                        );
-
-                        // Only take keyobard inputs, when the text editor has focus
-                        if text_edit.has_focus() {
-                            if enter_was_pressed {
-                                let command_line_buffer = ui_state.command_line_buffer.clone();
-
-                                if command_line_buffer == "cls" || command_line_buffer == "clear" {
-                                    ui_state.command_line_outputs.write().clear();
-                                }
-                                else {
-                                    ui_state.command_line_outputs.write().push(
-                                        ScriptLinePrompts::UserInput(command_line_buffer.clone()),
-                                    );
-                                    match lua_runtime.load(command_line_buffer.clone()).exec() {
-                                        Ok(_output) => (),
-                                        Err(_err) => {
-                                            ui_state
-                                                .command_line_outputs
-                                                .write()
-                                                .push(ScriptLinePrompts::Error(_err.to_string()));
-                                        },
-                                    }
-                                }
-
-                                if !command_line_buffer.is_empty() {
-                                    //Store the command used
-                                    ui_state
-                                        .command_line_inputs
-                                        .push_front(command_line_buffer.clone());
-                                }
-
-                                // Clear out the buffer regardless of the command being used.
-                                ui_state.command_line_buffer.clear();
-                            }
-
-                            if up_was_pressed {
-                                if ui_state.command_line_inputs.is_empty() {
-                                    return;
-                                }
-
-                                if ui_state.command_line_input_index == 0 {
-                                    ui_state.command_line_buffer =
-                                        ui_state.command_line_inputs[0].clone();
-
-                                    ui_state.command_line_input_index += 1;
-                                }
-                                else {
-                                    if ui_state.command_line_input_index as i32
-                                        <= ui_state.command_line_inputs.len() as i32 - 1
-                                    {
-                                        ui_state.command_line_buffer = ui_state.command_line_inputs
-                                            [ui_state.command_line_input_index]
-                                            .clone();
-                                        ui_state.command_line_input_index += 1;
-                                    }
-                                }
-                            }
-
-                            if down_was_pressed {
-                                if ui_state.command_line_input_index
-                                    == ui_state.command_line_inputs.len()
-                                {
-                                    ui_state.command_line_buffer = ui_state.command_line_inputs
-                                        [ui_state.command_line_input_index - 2]
-                                        .clone();
-                                    ui_state.command_line_input_index -= 2;
-                                }
-                                else if ui_state.command_line_input_index > 0 {
-                                    ui_state.command_line_input_index -= 1;
-
-                                    ui_state.command_line_buffer = ui_state.command_line_inputs
-                                        [ui_state.command_line_input_index]
-                                        .clone();
-                                }
-                                else {
-                                    ui_state.command_line_buffer.clear();
-                                }
-                            }
-                        }
-                    });
+                ui.menu_button("Toolbox", |ui| {
+                    ui.checkbox(&mut ui_state.manager_panel, "Item Manager");
+                    ui.checkbox(&mut ui_state.command_panel, "Command Panel");
                 });
             });
         });
+
+    if ui_state.command_panel {
+        bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
+            .resizable(true)
+            .show(ctx, |ui| {
+                let (_id, rect) = ui.allocate_space(vec2(ui.available_width(), 170.));
+
+                ui.painter().rect_filled(rect, 5.0, Color32::BLACK);
+
+                ui.allocate_new_ui(UiBuilder::new().max_rect(rect.shrink(10.)), |ui| {
+                    ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .max_height(120.)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for output in ui_state.command_line_outputs.read().iter() {
+                                match output {
+                                    ScriptLinePrompts::UserInput(text) => {
+                                        ui.label(
+                                            RichText::from(format!("> {text}"))
+                                                .color(Color32::GRAY),
+                                        );
+                                    },
+                                    ScriptLinePrompts::Standard(text) => {
+                                        ui.label(RichText::from(text).color(Color32::WHITE));
+                                    },
+                                    ScriptLinePrompts::Error(text) => {
+                                        ui.label(RichText::from(text).color(Color32::RED));
+                                    },
+                                }
+                            }
+                        });
+                    ui.horizontal_centered(|ui| {
+                        ui.group(|ui| {
+                            // Indicate the terminal input.
+                            ui.label(RichText::from("$>").color(Color32::WHITE));
+
+                            // Get key input before spawning the text editor, because that consumes the enter key.
+                            let enter_was_pressed = ctx.input_mut(|reader| {
+                                reader.consume_key(egui::Modifiers::NONE, Key::Enter)
+                            });
+
+                            let up_was_pressed = ctx.input_mut(|reader| {
+                                reader.consume_key(egui::Modifiers::NONE, Key::ArrowUp)
+                            });
+
+                            let down_was_pressed = ctx.input_mut(|reader| {
+                                reader.consume_key(egui::Modifiers::NONE, Key::ArrowDown)
+                            });
+
+                            // Create text editor
+                            let text_edit = ui.add(
+                                egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
+                                    .frame(false)
+                                    .code_editor()
+                                    .desired_width(ui.available_size_before_wrap().x)
+                                    .hint_text(RichText::from("lua command").italics()),
+                            );
+
+                            // If the underlying text was changed reset the command line input index to 0.
+                            if text_edit.changed() {
+                                ui_state.command_line_input_index = 0;
+                            }
+
+                            // Only take keyobard inputs, when the text editor has focus.
+                            if text_edit.has_focus() {
+                                if enter_was_pressed {
+                                    let command_line_buffer = ui_state.command_line_buffer.clone();
+
+                                    if command_line_buffer == "cls"
+                                        || command_line_buffer == "clear"
+                                    {
+                                        ui_state.command_line_outputs.write().clear();
+                                    }
+                                    else {
+                                        ui_state.command_line_outputs.write().push(
+                                            ScriptLinePrompts::UserInput(
+                                                command_line_buffer.clone(),
+                                            ),
+                                        );
+                                        match lua_runtime.load(command_line_buffer.clone()).exec() {
+                                            Ok(_output) => (),
+                                            Err(_err) => {
+                                                ui_state.command_line_outputs.write().push(
+                                                    ScriptLinePrompts::Error(_err.to_string()),
+                                                );
+                                            },
+                                        }
+                                    }
+
+                                    if !command_line_buffer.is_empty() {
+                                        //Store the command used
+                                        ui_state
+                                            .command_line_inputs
+                                            .push_front(command_line_buffer.clone());
+                                    }
+
+                                    // Clear out the buffer regardless of the command being used.
+                                    ui_state.command_line_buffer.clear();
+                                }
+
+                                if up_was_pressed {
+                                    if ui_state.command_line_inputs.is_empty() {
+                                        return;
+                                    }
+
+                                    if ui_state.command_line_input_index == 0 {
+                                        ui_state.command_line_buffer =
+                                            ui_state.command_line_inputs[0].clone();
+
+                                        ui_state.command_line_input_index += 1;
+                                    }
+                                    else {
+                                        if ui_state.command_line_input_index as i32
+                                            <= ui_state.command_line_inputs.len() as i32 - 1
+                                        {
+                                            ui_state.command_line_buffer = ui_state
+                                                .command_line_inputs
+                                                [ui_state.command_line_input_index]
+                                                .clone();
+                                            ui_state.command_line_input_index += 1;
+                                        }
+                                    }
+                                }
+
+                                if down_was_pressed {
+                                    if ui_state.command_line_input_index
+                                        == ui_state.command_line_inputs.len()
+                                    {
+                                        ui_state.command_line_buffer = ui_state.command_line_inputs
+                                            [ui_state.command_line_input_index - 2]
+                                            .clone();
+                                        ui_state.command_line_input_index -= 2;
+                                    }
+                                    else if ui_state.command_line_input_index > 0 {
+                                        ui_state.command_line_input_index -= 1;
+
+                                        ui_state.command_line_buffer = ui_state.command_line_inputs
+                                            [ui_state.command_line_input_index]
+                                            .clone();
+                                    }
+                                    else {
+                                        ui_state.command_line_buffer.clear();
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+    }
 
     if ui_state.manager_panel {
         bevy_egui::egui::SidePanel::right("right_panel")
             .resizable(true)
             .show(ctx, |ui| {
-                let code_manager_window = ui_state.code_manager_window.clone();
-
                 let toasts = ui_state.toasts.clone();
 
                 let rename_buffer = ui_state.rename_buffer.clone();
@@ -464,7 +471,6 @@ pub fn main_ui(
 
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {
-                        code_manager_window,
                         lua_runtime: lua_runtime.clone(),
                         toasts,
                         drawers: drawers.clone(),
