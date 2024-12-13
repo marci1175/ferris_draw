@@ -3,7 +3,9 @@ use bevy::{
     prelude::{Res, ResMut},
 };
 use bevy_egui::{
-    egui::{self, vec2, Color32, Key, Layout, Rect, RichText, ScrollArea, Sense, UiBuilder},
+    egui::{
+        self, vec2, Color32, Key, Layout, Rect, RichText, ScrollArea, Sense, TextEdit, UiBuilder,
+    },
     EguiContexts,
 };
 use miniz_oxide::deflate::CompressionLevel;
@@ -165,7 +167,31 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                             ui.push_id(name.clone(), |ui| {
                                 ui.collapsing("Settings", |ui| {
                                     ui.menu_button("Edit", |ui| {
-                                        ui.code_editor(script);
+                                    let theme =
+                                        egui_extras::syntax_highlighting::CodeTheme::from_memory(
+                                            ui.ctx(),
+                                            ui.style(),
+                                        );
+
+                                    let mut layouter =
+                                        |ui: &egui::Ui, string: &str, wrap_width: f32| {
+                                            let mut layout_job =
+                                                egui_extras::syntax_highlighting::highlight(
+                                                    ui.ctx(),
+                                                    ui.style(),
+                                                    &theme,
+                                                    string,
+                                                    "lua",
+                                                );
+                                            layout_job.wrap.max_width = wrap_width;
+                                            ui.fonts(|f| f.layout_job(layout_job))
+                                        };
+
+                                        ui.add(
+                                            TextEdit::multiline(script)
+                                                .code_editor()
+                                                .layouter(&mut layouter),
+                                        );
                                     });
                                     if ui.button("Delete").clicked() {
                                         should_keep = false;
@@ -357,12 +383,30 @@ pub fn main_ui(
                             let down_was_pressed = ctx.input_mut(|reader| {
                                 reader.consume_key(egui::Modifiers::NONE, Key::ArrowDown)
                             });
+                            
+                            let theme = egui_extras::syntax_highlighting::CodeTheme::from_memory(
+                                ui.ctx(),
+                                ui.style(),
+                            );
+
+                            let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
+                                let mut layout_job = egui_extras::syntax_highlighting::highlight(
+                                    ui.ctx(),
+                                    ui.style(),
+                                    &theme,
+                                    string,
+                                    "lua",
+                                );
+                                layout_job.wrap.max_width = wrap_width;
+                                ui.fonts(|f| f.layout_job(layout_job))
+                            };
 
                             // Create text editor
                             let text_edit = ui.add(
                                 egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
                                     .frame(false)
                                     .code_editor()
+                                    .layouter(&mut layouter)
                                     .desired_width(ui.available_size_before_wrap().x)
                                     .hint_text(RichText::from("lua command").italics()),
                             );
