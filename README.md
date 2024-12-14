@@ -40,4 +40,4 @@
    Centers the object identified by the given name.
 
 5. **`color(String, f32, f32, f32, f32)`**  
-   Sets the color of the object identified by the given name. The parameters `f32, f32, f32, f32` likely represent red, green, blue, and alpha (opacity) values, each ranging from 0.0 to 1.0.
+   Sets the color of the object identified by the given name. The parameters `f32, f32, f32, f32` represent red, green, blue, and alpha (opacity) values, each ranging from 0.0 to 1.0.
