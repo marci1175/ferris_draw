@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use bevy::{
-    math::Quat, prelude::PluginGroup, text::cosmic_text::Angle, window::{Window, WindowPlugin}
+    asset::embedded_asset,
+    math::Quat,
+    prelude::PluginGroup,
+    text::cosmic_text::Angle,
+    window::{Window, WindowPlugin},
 };
 use std::{fs, path::PathBuf};
 // hide console window on Windows in release
@@ -26,24 +30,28 @@ use miniz_oxide::deflate::CompressionLevel;
 #[tokio::main]
 async fn main()
 {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Ferris Draw".to_string(),
-                ..Default::default()
-            }),
+    let mut app = App::new();
+
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Ferris Draw".to_string(),
             ..Default::default()
-        }))
-        .add_plugins(EguiPlugin)
-        .init_resource::<UiState>()
-        .init_resource::<Drawers>()
-        .init_resource::<LuaRuntime>()
-        .add_systems(Startup, setup)
-        .add_systems(PreUpdate, clear_screen)
-        .add_systems(Update, main_ui)
-        .add_systems(Update, draw)
-        .add_systems(Update, exit_handler)
-        .run();
+        }),
+        ..Default::default()
+    }))
+    .add_plugins(EguiPlugin)
+    .init_resource::<UiState>()
+    .init_resource::<Drawers>()
+    .init_resource::<LuaRuntime>()
+    .add_systems(Startup, setup)
+    .add_systems(PreUpdate, clear_screen)
+    .add_systems(Update, main_ui)
+    .add_systems(Update, draw)
+    .add_systems(Update, exit_handler);
+
+    embedded_asset!(app, "../assets/ferris.png");
+
+    app.run();
 }
 
 fn setup(
@@ -121,10 +129,15 @@ fn draw(
             DrawerEntity(id.clone()),
         ));
 
+        let icon: bevy::prelude::Handle<bevy::prelude::Image> =
+            asset_server.load("embedded://ferris_draw/../assets/ferris.png");
+
         commands.spawn((
-            Sprite::from_image(asset_server.load("ferris.png")),
+            Sprite::from_image(icon),
             Transform::from_xyz(drawer_info.pos.x, drawer_info.pos.y, 0.)
-                .with_rotation(Quat::from_rotation_z(Angle::from_degrees(drawer.ang.to_degrees() - 90.).to_radians()))
+                .with_rotation(Quat::from_rotation_z(
+                    Angle::from_degrees(drawer.ang.to_degrees() - 90.).to_radians(),
+                ))
                 .with_scale(vec3(0.1, 0.1, 1.)),
             DrawerEntity(id.clone()),
         ));
