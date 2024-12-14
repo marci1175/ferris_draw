@@ -44,3 +44,13 @@
 
 6. **`wipe()`**
    Wipes all drawings from the workspace.
+
+7. **`exists(String)`**
+   Returns whether the drawer exists with that specific ID.
+   
+### Project showcase
+**The application is subject to change, this video depicts the first release**
+https://youtu.be/NcGhhBk8_k4
+
+6. **`wipe()`**
+   Wipes all drawings from the workspace.
