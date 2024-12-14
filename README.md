@@ -41,3 +41,7 @@
 
 5. **`color(String, f32, f32, f32, f32)`**  
    Sets the color of the object identified by the given name. The parameters `f32, f32, f32, f32` represent red, green, blue, and alpha (opacity) values, each ranging from 0.0 to 1.0.
+
+### Project showcase
+**The application is subject to change, this video depicts the first release**
+https://youtu.be/NcGhhBk8_k4
