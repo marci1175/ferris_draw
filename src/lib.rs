@@ -192,9 +192,11 @@ pub fn init_lua_functions(
     // Creates a new drawer with the Drawer handle, from a unique handle.
     let new_drawer = lua_vm
         .create_function(move |_, id: String| {
-            let insertion = drawers_clone.insert(id.clone(), Drawer::default());
-
-            if insertion.is_some() {
+            if !drawers_clone.contains_key(&id)
+            {
+                drawers_clone.insert(id.clone(), Drawer::default());
+            }
+            else {
                 return Err(mlua::Error::RuntimeError(format!(
                     "The drawer with handle {id} already exists."
                 )));
@@ -285,7 +287,7 @@ pub fn init_lua_functions(
         })
         .unwrap();
 
-    let drawers_clone = drawers_handle.clone();
+        let drawers_clone = drawers_handle.clone();
 
     // Moves the drawer forward by a set amount of units, this makes the drawer draw too.
     let forward = lua_vm
@@ -336,6 +338,28 @@ pub fn init_lua_functions(
         })
         .unwrap();
 
+    let drawers_clone = drawers_handle.clone();
+
+    let wipe = lua_vm
+        .create_function(move |_, _: ()| {
+            for mut drawer in drawers_clone.iter_mut() {
+                let drawer = drawer.value_mut();
+
+                drawer.line.points.clear();
+            }
+
+            Ok(())
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let exist = lua_vm
+        .create_function(move |_, id: String| {
+            Ok(drawers_clone.contains_key(&id))
+        })
+        .unwrap();
+
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new_drawer).unwrap();
     lua_vm.globals().set("rotate", rotate_drawer).unwrap();
@@ -343,4 +367,6 @@ pub fn init_lua_functions(
     lua_vm.globals().set("center", center).unwrap();
     lua_vm.globals().set("color", color).unwrap();
     lua_vm.globals().set("print", print).unwrap();
+    lua_vm.globals().set("wipe", wipe).unwrap();
+    lua_vm.globals().set("exist", exist).unwrap();
 }
