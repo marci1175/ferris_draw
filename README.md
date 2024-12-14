@@ -15,7 +15,7 @@
 - The drawings are rendered with the [Bevy game engine](https://bevyengine.org/), to ensure flexibility, safety and speed.
 - Ui components are created via [egui](https://crates.io/crates/egui).
 - You can run scripts by utilizing the scripts tab but you can run quick commands via the Command Panel available in the application.
-- - Syntax highlighting is available in the Script Manager and the Command Panel.
+  - Syntax highlighting is available in the Script Manager and the Command Panel.
 - The Command Panel has the user friendly interface with features to enhance production.
 - You can also save and open projects.
 
