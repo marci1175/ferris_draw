@@ -349,7 +349,7 @@ pub fn init_lua_functions(
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
 
-                drawer.line.points.clear();
+                drawer.line.points = vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)];
             }
 
             Ok(())
@@ -378,9 +378,24 @@ pub fn init_lua_functions(
             })
             .unwrap();
 
+        let drawers_clone = drawers_handle.clone();
+
+        let drawers = lua_vm
+            .create_function(move |_, _: ()| {
+                let mut names = Vec::new();
+
+                for drawer in drawers_clone.iter() {
+                    names.push(drawer.key().clone());
+                }
+
+                Ok(names)
+            })
+            .unwrap();
+
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new_drawer).unwrap();
     lua_vm.globals().set("remove", remove).unwrap();
+    lua_vm.globals().set("drawers", drawers).unwrap();
     lua_vm.globals().set("rotate", rotate_drawer).unwrap();
     lua_vm.globals().set("forward", forward).unwrap();
     lua_vm.globals().set("center", center).unwrap();

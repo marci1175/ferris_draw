@@ -50,7 +50,10 @@
 
 8. **`remove(String)`**
    Removes the drawer object based on the ID.
-   
+
+9. **`drawers()`**
+   Returns a list of the drawers' name.
+
 ### Project showcase
 **The application is subject to change, this video depicts the first release**
 https://youtu.be/NcGhhBk8_k4
