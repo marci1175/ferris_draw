@@ -47,6 +47,9 @@
 
 7. **`exists(String)`**
    Returns whether the drawer exists with that specific ID.
+
+8. **`remove(String)`**
+   Removes the drawer object based on the ID.
    
 ### Project showcase
 **The application is subject to change, this video depicts the first release**
