@@ -335,6 +335,27 @@ pub fn main_ui(
             });
         });
 
+        if ui_state.manager_panel {
+            bevy_egui::egui::SidePanel::right("right_panel")
+                .resizable(true)
+                .show(ctx, |ui| {
+                    let toasts = ui_state.toasts.clone();
+    
+                    let rename_buffer = ui_state.rename_buffer.clone();
+                    let name_buffer = ui_state.name_buffer.clone();
+    
+                    ui_state.item_manager.ui(
+                        &mut ManagerBehavior {
+                            lua_runtime: lua_runtime.clone(),
+                            toasts,
+                            drawers: drawers.clone(),
+                            rename_buffer,
+                            name_buffer,
+                        },
+                        ui,
+                    );
+                });
+        }
     if ui_state.command_panel {
         bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(true)
@@ -366,6 +387,7 @@ pub fn main_ui(
                                 }
                             }
                         });
+
                     ui.horizontal_centered(|ui| {
                         ui.group(|ui| {
                             // Indicate the terminal input.
@@ -383,7 +405,7 @@ pub fn main_ui(
                             let down_was_pressed = ctx.input_mut(|reader| {
                                 reader.consume_key(egui::Modifiers::NONE, Key::ArrowDown)
                             });
-                            
+
                             let theme = egui_extras::syntax_highlighting::CodeTheme::from_memory(
                                 ui.ctx(),
                                 ui.style(),
@@ -501,28 +523,6 @@ pub fn main_ui(
                         });
                     });
                 });
-            });
-    }
-
-    if ui_state.manager_panel {
-        bevy_egui::egui::SidePanel::right("right_panel")
-            .resizable(true)
-            .show(ctx, |ui| {
-                let toasts = ui_state.toasts.clone();
-
-                let rename_buffer = ui_state.rename_buffer.clone();
-                let name_buffer = ui_state.name_buffer.clone();
-
-                ui_state.item_manager.ui(
-                    &mut ManagerBehavior {
-                        lua_runtime: lua_runtime.clone(),
-                        toasts,
-                        drawers: drawers.clone(),
-                        rename_buffer,
-                        name_buffer,
-                    },
-                    ui,
-                );
             });
     }
 }

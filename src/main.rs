@@ -1,8 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use bevy::{
-    prelude::PluginGroup,
-    window::{Window, WindowPlugin},
+    math::Quat, prelude::PluginGroup, text::cosmic_text::Angle, window::{Window, WindowPlugin}
 };
 use std::{fs, path::PathBuf};
 // hide console window on Windows in release
@@ -125,6 +124,7 @@ fn draw(
         commands.spawn((
             Sprite::from_image(asset_server.load("ferris.png")),
             Transform::from_xyz(drawer_info.pos.x, drawer_info.pos.y, 0.)
+                .with_rotation(Quat::from_rotation_z(Angle::from_degrees(drawer.ang.to_degrees() - 90.).to_radians()))
                 .with_scale(vec3(0.1, 0.1, 1.)),
             DrawerEntity(id.clone()),
         ));
