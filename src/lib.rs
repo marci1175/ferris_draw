@@ -13,7 +13,7 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
-use mlua::Lua;
+use mlua::{Error, Lua};
 use parking_lot::RwLock;
 
 #[derive(Resource, Clone)]
@@ -245,6 +245,10 @@ pub fn init_lua_functions(
                 Some(mut drawer) => {
                     //Reset the drawer's position.
                     drawer.pos = Vec2::default();
+
+                    //Add the reseted pos to the drawer
+                    drawer.line.points = vec![(Vec3::default(), Color::WHITE)];
+
                     //Reset the drawer's angle.
                     drawer.ang = Angle::from_degrees(90.);
                 },
@@ -354,19 +358,34 @@ pub fn init_lua_functions(
 
     let drawers_clone = drawers_handle.clone();
 
-    let exist = lua_vm
+    let exists = lua_vm
         .create_function(move |_, id: String| {
             Ok(drawers_clone.contains_key(&id))
         })
         .unwrap();
 
+        let drawers_clone = drawers_handle.clone();
+
+        let remove = lua_vm
+            .create_function(move |_, id: String| {
+                if drawers_clone.remove(&id).is_none() {
+                    return Err(Error::RuntimeError(format!(
+                        "The drawer with handle {id} doesn't exist."
+                    )));
+                }
+
+                Ok(())
+            })
+            .unwrap();
+
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new_drawer).unwrap();
+    lua_vm.globals().set("remove", remove).unwrap();
     lua_vm.globals().set("rotate", rotate_drawer).unwrap();
     lua_vm.globals().set("forward", forward).unwrap();
     lua_vm.globals().set("center", center).unwrap();
     lua_vm.globals().set("color", color).unwrap();
     lua_vm.globals().set("print", print).unwrap();
     lua_vm.globals().set("wipe", wipe).unwrap();
-    lua_vm.globals().set("exist", exist).unwrap();
+    lua_vm.globals().set("exists", exists).unwrap();
 }
