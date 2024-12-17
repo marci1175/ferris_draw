@@ -23,12 +23,11 @@ use bevy_egui::EguiPlugin;
 use ferris_draw::{
     init_lua_functions,
     ui::{main_ui, UiState},
-    DrawerEntity, Drawers, LuaRuntime,
+    DrawerMesh, Drawers, LuaRuntime,
 };
 use miniz_oxide::deflate::CompressionLevel;
 
-#[tokio::main]
-async fn main()
+fn main()
 {
     let mut app = App::new();
 
@@ -121,13 +120,17 @@ fn draw(
     for drawer in drawers.iter() {
         let (id, drawer_info) = drawer.pair();
 
-        let shape = meshes.add(drawer_info.line.clone());
+        for line in &drawer_info.lines {
+            let mesh = Mesh::from(line.clone());
 
-        commands.spawn((
-            Mesh2d(shape),
-            MeshMaterial2d(materials.add(drawer_info.color)),
-            DrawerEntity(id.clone()),
-        ));
+            let shape = meshes.add(mesh);
+
+            commands.spawn((
+                Mesh2d(shape),
+                MeshMaterial2d(materials.add(drawer_info.color)),
+                DrawerMesh(id.clone()),
+            ));
+        }
 
         let icon: bevy::prelude::Handle<bevy::prelude::Image> =
             asset_server.load("embedded://ferris_draw/../assets/ferris.png");
@@ -139,12 +142,12 @@ fn draw(
                     Angle::from_degrees(drawer.ang.to_degrees() - 90.).to_radians(),
                 ))
                 .with_scale(vec3(0.1, 0.1, 1.)),
-            DrawerEntity(id.clone()),
+            DrawerMesh(id.clone()),
         ));
     }
 }
 
-fn clear_screen(mut commands: Commands, entities: Query<Entity, With<DrawerEntity>>)
+fn clear_screen(mut commands: Commands, entities: Query<Entity, With<DrawerMesh>>)
 {
     for entity in entities.iter() {
         commands.entity(entity).despawn();

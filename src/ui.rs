@@ -1,6 +1,9 @@
 use bevy::{
-    color::palettes::css::WHITE,
-    prelude::{Res, ResMut},
+    asset::{Assets, RenderAssetUsages},
+    color::{palettes::css::WHITE, Color},
+    math::{Vec3, Vec4},
+    prelude::{Commands, Mesh, Mesh2d, Res, ResMut},
+    sprite::{ColorMaterial, MeshMaterial2d},
 };
 use bevy_egui::{
     egui::{
@@ -22,7 +25,7 @@ use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
 use indexmap::{map::MutableKeys, IndexMap};
 
-use crate::{Drawers, LuaRuntime, ScriptLinePrompts};
+use crate::{color_into_vec4, DrawerMesh, Drawers, LuaRuntime, ScriptLinePrompts};
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -71,7 +74,7 @@ impl Default for UiState
                 let mut tiles = Tiles::default();
                 let mut tileids = vec![];
 
-                tileids.push(tiles.insert_pane(ManagerPane::ItemManager));
+                tileids.push(tiles.insert_pane(ManagerPane::EntityManager));
                 tileids.push(tiles.insert_pane(ManagerPane::Scripts(IndexMap::new())));
 
                 egui_tiles::Tree::new("manager_tree", tiles.insert_tab_tile(tileids), tiles)
@@ -93,11 +96,11 @@ pub enum ManagerPane
 {
     Scripts(IndexMap<String, String>),
     #[default]
-    ItemManager,
+    EntityManager,
 }
 
 /// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
-pub struct ManagerBehavior
+pub struct ManagerBehavior<'a>
 {
     /// The [`mlua::Lua`] runtime handle, this can be used to run code on.
     pub lua_runtime: LuaRuntime,
@@ -111,9 +114,13 @@ pub struct ManagerBehavior
     name_buffer: Arc<Mutex<String>>,
 
     rename_buffer: Arc<Mutex<String>>,
+
+    commands: Commands<'a, 'a>,
+    meshes: ResMut<'a, Assets<Mesh>>,
+    materials: ResMut<'a, Assets<ColorMaterial>>,
 }
 
-impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
+impl<'a> egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'a>
 {
     fn pane_ui(
         &mut self,
@@ -128,20 +135,23 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                 ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
                     ui.horizontal_centered(|ui| {
-                        let add_button = ui.button("Add");
-                        if add_button.clicked() {
-                            let name_buffer = &mut *self.name_buffer.lock();
+                        let name_buffer = &mut *self.name_buffer.lock();
 
-                            if !scripts.contains_key(&*name_buffer) {
-                                scripts.insert(name_buffer.clone(), String::from(""));
-                                name_buffer.clear();
-                            }
-                            else {
-                                self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("The script named: {name_buffer} already exists. Please choose another name or rename an existing script.")));
-                            }
-                        }
+                        ui.add_enabled_ui(!name_buffer.is_empty(), |ui| {
+                            let add_button = ui.button("Add");
 
-                        ui.text_edit_singleline(&mut *self.name_buffer.lock());
+                            if add_button.clicked() {
+                                if !scripts.contains_key(&*name_buffer) {
+                                    scripts.insert(name_buffer.clone(), String::from(""));
+                                    name_buffer.clear();
+                                }
+                                else {
+                                    self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("The script named: {name_buffer} already exists. Please choose another name or rename an existing script.")));
+                                }
+                            }
+                        });
+
+                        ui.text_edit_singleline(name_buffer);
                     });
                 });
 
@@ -155,8 +165,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                         ui.horizontal(|ui| {
                             ui.label(name.clone());
                             if ui.button("Run").clicked() {
-                                let script = script.to_string();
-                                if let Err(err) = self.lua_runtime.load(script).exec() {
+                                if let Err(err) = self.lua_runtime.load(script.to_string()).exec() {
                                     self.toasts.lock().add(
                                         Toast::new()
                                             .kind(egui_toast::ToastKind::Error)
@@ -218,7 +227,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     });
                 });
             },
-            ManagerPane::ItemManager => {
+            ManagerPane::EntityManager => {
                 ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -255,10 +264,50 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
     {
         match pane {
             ManagerPane::Scripts(scripts) => format!("Scripts: {}", scripts.len()),
-            ManagerPane::ItemManager => "Items".to_string(),
+            ManagerPane::EntityManager => format!("Entities: {}", self.drawers.len()),
         }
         .into()
     }
+}
+
+pub fn fill_from_points(
+    points: Vec<Vec3>,
+    color: Color,
+    id: String,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+)
+{
+    let mut indices = vec![];
+
+    for i in 1..points.len() - 1 {
+        indices.push(0);
+        indices.push(i as u32);
+        indices.push((i + 1) as u32);
+    }
+
+    let mut mesh = Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleStrip,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    // Add the point positions as an attribute
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        points.iter().map(|point| *point).collect::<Vec<Vec3>>(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0., 0., 1.]; points.len()])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0., 0.]; points.len()]);
+
+    mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+
+    let shape = meshes.add(mesh);
+
+    commands.spawn((
+        Mesh2d(shape),
+        MeshMaterial2d(materials.add(color)),
+        DrawerMesh(id.clone()),
+    ));
 }
 
 pub fn main_ui(
@@ -266,6 +315,9 @@ pub fn main_ui(
     mut contexts: EguiContexts<'_, '_>,
     lua_runtime: ResMut<LuaRuntime>,
     drawers: Res<Drawers>,
+    commands: Commands,
+    meshes: ResMut<Assets<Mesh>>,
+    materials: ResMut<Assets<ColorMaterial>>,
 )
 {
     let ctx = contexts.ctx_mut();
@@ -351,11 +403,15 @@ pub fn main_ui(
                         drawers: drawers.clone(),
                         rename_buffer,
                         name_buffer,
+                        commands,
+                        meshes,
+                        materials,
                     },
                     ui,
                 );
             });
     }
+
     if ui_state.command_panel {
         bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(true)

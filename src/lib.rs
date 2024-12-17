@@ -13,6 +13,7 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
+use geo::{coord, Contains, ConvexHull, Coord, LineString, Point};
 use mlua::{Error, Lua};
 use parking_lot::RwLock;
 
@@ -56,7 +57,7 @@ pub enum ScriptLinePrompts
 }
 
 #[derive(Component)]
-pub struct DrawerEntity(pub String);
+pub struct DrawerMesh(pub String);
 
 /// A list of points that will have a line drawn between each consecutive points
 #[derive(Debug, Clone, Default)]
@@ -115,6 +116,9 @@ pub fn color_into_vec4(color: Color) -> Vec4
 #[derive(Resource, Debug)]
 pub struct Drawer
 {
+    /// Whether the Drawer should draw.
+    pub enabled: bool,
+
     /// The position of the Drawer.
     pub pos: Vec2,
 
@@ -122,7 +126,7 @@ pub struct Drawer
     pub ang: Angle,
 
     /// The line drawn by the drawer.
-    pub line: LineStrip,
+    pub lines: Vec<LineStrip>,
 
     /// The color of the Drawer.
     pub color: Color,
@@ -133,11 +137,12 @@ impl Default for Drawer
     fn default() -> Self
     {
         Self {
+            enabled: true,
             pos: Vec2::default(),
             ang: Angle::from_degrees(90.),
-            line: LineStrip {
+            lines: vec![LineStrip {
                 points: vec![(Vec3::default(), Color::WHITE)],
-            },
+            }],
             color: Color::WHITE,
         }
     }
@@ -192,8 +197,7 @@ pub fn init_lua_functions(
     // Creates a new drawer with the Drawer handle, from a unique handle.
     let new_drawer = lua_vm
         .create_function(move |_, id: String| {
-            if !drawers_clone.contains_key(&id)
-            {
+            if !drawers_clone.contains_key(&id) {
                 drawers_clone.insert(id.clone(), Drawer::default());
             }
             else {
@@ -247,7 +251,7 @@ pub fn init_lua_functions(
                     drawer.pos = Vec2::default();
 
                     //Add the reseted pos to the drawer
-                    drawer.line.points = vec![(Vec3::default(), Color::WHITE)];
+                    drawer.lines = vec![LineStrip::new(vec![(Vec3::default(), Color::WHITE)])];
 
                     //Reset the drawer's angle.
                     drawer.ang = Angle::from_degrees(90.);
@@ -291,7 +295,7 @@ pub fn init_lua_functions(
         })
         .unwrap();
 
-        let drawers_clone = drawers_handle.clone();
+    let drawers_clone = drawers_handle.clone();
 
     // Moves the drawer forward by a set amount of units, this makes the drawer draw too.
     let forward = lua_vm
@@ -307,6 +311,10 @@ pub fn init_lua_functions(
                     // Calculate the difference on the y and x coordinate from its angle.
                     // Get origin
                     let origin = drawer.pos;
+
+                    //Clone the color so we can move it into the lines' list.
+                    let drawer_color = drawer.color;
+
                     // Degrees into radians.
                     let angle_rad = drawer.ang.to_radians();
 
@@ -314,18 +322,21 @@ pub fn init_lua_functions(
                     let transformation_factor = amount;
 
                     // The new x.
-                    let x = origin.x + transformation_factor * angle_rad.cos();
+                    let x = origin.x
+                        + transformation_factor * floating_point_calculation_error(angle_rad.cos());
                     // The new y.
-                    let y = origin.y + transformation_factor * angle_rad.sin();
+                    let y = origin.y
+                        + transformation_factor * floating_point_calculation_error(angle_rad.sin());
 
-                    //Clone the color so we can move it into the lines' list.
-                    let drawer_color = drawer.color;
-
-                    //Store the new position and the drawer's color.
-                    drawer
-                        .line
-                        .points
-                        .push((Vec3 { x, y, z: 0. }, drawer_color));
+                    //Store the new position and the drawer's color if it is enabled
+                    if drawer.enabled {
+                        drawer
+                            .lines
+                            .last_mut()
+                            .unwrap()
+                            .points
+                            .push((Vec3 { x, y, z: 0. }, drawer_color));
+                    }
 
                     //Set the new drawers position.
                     drawer.pos = Vec2::new(x, y);
@@ -349,7 +360,10 @@ pub fn init_lua_functions(
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
 
-                drawer.line.points = vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)];
+                drawer.lines = vec![LineStrip::new(vec![(
+                    Vec3::new(drawer.pos.x, drawer.pos.y, 0.),
+                    Color::WHITE,
+                )])];
             }
 
             Ok(())
@@ -359,38 +373,149 @@ pub fn init_lua_functions(
     let drawers_clone = drawers_handle.clone();
 
     let exists = lua_vm
+        .create_function(move |_, id: String| Ok(drawers_clone.contains_key(&id)))
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let remove = lua_vm
         .create_function(move |_, id: String| {
-            Ok(drawers_clone.contains_key(&id))
+            if drawers_clone.remove(&id).is_none() {
+                return Err(Error::RuntimeError(format!(
+                    "The drawer with handle {id} doesn't exist."
+                )));
+            }
+
+            Ok(())
         })
         .unwrap();
 
-        let drawers_clone = drawers_handle.clone();
+    let drawers_clone = drawers_handle.clone();
 
-        let remove = lua_vm
-            .create_function(move |_, id: String| {
-                if drawers_clone.remove(&id).is_none() {
+    let drawers = lua_vm
+        .create_function(move |_, _: ()| {
+            let mut names = Vec::new();
+
+            for drawer in drawers_clone.iter() {
+                names.push(drawer.key().clone());
+            }
+
+            Ok(names)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let enable = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    drawer.enabled = true;
+
+                    let tuple = (Vec3::new(drawer.pos.x, drawer.pos.y, 0.), drawer.color);
+
+                    drawer.lines.push(LineStrip::new(vec![tuple]));
+                },
+                None => {
                     return Err(Error::RuntimeError(format!(
                         "The drawer with handle {id} doesn't exist."
                     )));
-                }
+                },
+            }
 
-                Ok(())
-            })
-            .unwrap();
+            return Ok(());
+        })
+        .unwrap();
+    let drawers_clone = drawers_handle.clone();
 
-        let drawers_clone = drawers_handle.clone();
+    let disable = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    drawer.enabled = false;
+                },
+                None => {
+                    return Err(Error::RuntimeError(format!(
+                        "The drawer with handle {id} doesn't exist."
+                    )));
+                },
+            }
 
-        let drawers = lua_vm
-            .create_function(move |_, _: ()| {
-                let mut names = Vec::new();
+            Ok(())
+        })
+        .unwrap();
 
-                for drawer in drawers_clone.iter() {
-                    names.push(drawer.key().clone());
-                }
+    let drawers_clone = drawers_handle.clone();
 
-                Ok(names)
-            })
-            .unwrap();
+    let fill = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get(&id) {
+                Some(selected_drawer) => {
+                    let drawer_lines: Vec<LineStrip> = drawers_clone
+                        .iter()
+                        .flat_map(|pair| {
+                            let drawer = pair.value();
+
+                            drawer.lines.clone()
+                        })
+                        .collect();
+
+                    let mut lines: Vec<Line> = vec![];
+
+                    for drawer_line in drawer_lines {
+                            for line_pos in drawer_line.points.windows(2) {
+                                let ((min, _), (max, _)) = (line_pos[0], line_pos[1]);
+    
+                                lines.push(Line::new(min, max));
+                            }
+                    }
+
+                    let mut checked_lines: Vec<Line> = vec![];
+                    let mut was_last_intersection_check_true = false;
+                    
+                    for line in lines.clone() {
+                        //The circle made by the lines
+                        let mut positions: Vec<Coord> = vec![];
+                        
+                        for checked_line in checked_lines.clone() {
+                            if let Some(intersect_point) = line.intersects(&checked_line) {
+                                // If the checked line is intersected by the line that means that the first line to the circle is the one that got checked and the last is the line we checked it with
+                                was_last_intersection_check_true = true;
+
+                                positions.push(coord! {x: intersect_point.x as f64, y: intersect_point.y as f64});
+                            }
+                            else if was_last_intersection_check_true || *lines.last().unwrap() == line {
+                                was_last_intersection_check_true = false;
+                                
+                                if positions.len() > 2 {
+                                    let polygon = geo::Polygon::new(LineString::new(positions.clone()), vec![]);
+
+                                    let is_drawer_in_shape =
+                                        polygon.convex_hull().contains(&Point::new(
+                                            selected_drawer.pos.x as f64,
+                                            selected_drawer.pos.y as f64,
+                                        ));
+
+                                        dbg!(is_drawer_in_shape);
+                                        panic!();
+                                }
+                            }
+                        }
+
+                        checked_lines.push(line);
+                    }
+                    // panic!();
+                },
+                None => {
+                    return Err(Error::RuntimeError(format!(
+                        "The drawer with handle {id} doesn't exist."
+                    )));
+                },
+            }
+
+            Ok(())
+        })
+        .unwrap();
 
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new_drawer).unwrap();
@@ -403,4 +528,87 @@ pub fn init_lua_functions(
     lua_vm.globals().set("print", print).unwrap();
     lua_vm.globals().set("wipe", wipe).unwrap();
     lua_vm.globals().set("exists", exists).unwrap();
+    lua_vm.globals().set("enable", enable).unwrap();
+    lua_vm.globals().set("disable", disable).unwrap();
+    lua_vm.globals().set("fill", fill).unwrap();
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+/// Two points which will have a line drawn between them.
+pub struct Line
+{
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+pub enum IntersectType
+{
+    Connected(Vec3),
+    Intersected(Vec3),
+}
+
+impl Line
+{
+    pub fn new(min: Vec3, max: Vec3) -> Self
+    {
+        Self { min, max }
+    }
+
+    pub fn intersects(&self, other_line: &Self) -> Option<Vec3>
+    {
+        if self == other_line {
+            return None;
+        }
+
+        // Slope of Line 1 (m1) and Line 2 (m2)
+        let mut m1 = (self.max.y - self.min.y) / (self.max.x - self.min.x);
+
+        if (self.max.x - self.min.x) == 0. {
+            m1 = 0.;
+        }
+
+        let mut m2 = (other_line.max.y - other_line.min.y) / (other_line.max.x - other_line.min.x);
+
+        if (other_line.max.x - other_line.min.x) == 0. {
+            m2 = 0.;
+        }
+
+        dbg!(other_line);
+        dbg!(self);
+
+        if other_line.max == self.min || self.min == other_line.min {
+            return Some(Vec3::new(self.min.x, self.min.y, 0.));
+        }
+
+        if self.max == other_line.min || self.max == other_line.max {
+            return Some(Vec3::new(self.max.x, self.max.y, 0.));
+        }
+
+        // Check if the lines are parallel (i.e., have the same slope)
+        if m1 == m2 {
+            return None;
+        }
+
+        // Calculate the y-intercepts (b1 and b2) of the two lines
+        let b1 = floating_point_calculation_error(self.min.y - m1 * self.min.x);
+        let b2 = floating_point_calculation_error(other_line.min.y - m2 * other_line.min.x);
+
+        // Calculate the x-coordinate of the intersection point
+        let intersection_x = (b2 - b1) / (m1 - m2);
+
+        // Calculate the y-coordinate of the intersection point using either line's equation
+        let intersection_y = m1 * intersection_x + b1;
+
+        Some(Vec3::new(intersection_x, intersection_y, 0.))
+    }
+}
+
+pub fn floating_point_calculation_error(float: f32) -> f32
+{
+    if float.abs() < 0.000001 {
+        0.0
+    }
+    else {
+        float
+    }
 }
