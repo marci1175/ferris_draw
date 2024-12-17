@@ -423,7 +423,7 @@ pub fn init_lua_functions(
                 },
             }
 
-            return Ok(());
+            Ok(())
         })
         .unwrap();
     let drawers_clone = drawers_handle.clone();

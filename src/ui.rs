@@ -1,22 +1,16 @@
 use bevy::{
     asset::{Assets, RenderAssetUsages},
-    color::{palettes::css::WHITE, Color},
-    math::{Vec3, Vec4},
+    color::Color,
+    math::Vec3,
     prelude::{Commands, Mesh, Mesh2d, Res, ResMut},
     sprite::{ColorMaterial, MeshMaterial2d},
 };
 use bevy_egui::{
-    egui::{
-        self, vec2, Color32, Key, Layout, Rect, RichText, ScrollArea, Sense, TextEdit, UiBuilder,
-    },
+    egui::{self, vec2, Color32, Key, RichText, ScrollArea, TextEdit, UiBuilder},
     EguiContexts,
 };
 use miniz_oxide::deflate::CompressionLevel;
-use std::{
-    collections::VecDeque,
-    fs,
-    sync::{atomic::AtomicBool, Arc},
-};
+use std::{collections::VecDeque, fs, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 
@@ -25,7 +19,7 @@ use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
 use indexmap::{map::MutableKeys, IndexMap};
 
-use crate::{color_into_vec4, DrawerMesh, Drawers, LuaRuntime, ScriptLinePrompts};
+use crate::{DrawerMesh, Drawers, LuaRuntime, ScriptLinePrompts};
 
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -72,10 +66,10 @@ impl Default for UiState
             manager_panel: false,
             item_manager: {
                 let mut tiles = Tiles::default();
-                let mut tileids = vec![];
-
-                tileids.push(tiles.insert_pane(ManagerPane::EntityManager));
-                tileids.push(tiles.insert_pane(ManagerPane::Scripts(IndexMap::new())));
+                let tileids = vec![
+                    tiles.insert_pane(ManagerPane::EntityManager),
+                    tiles.insert_pane(ManagerPane::Scripts(IndexMap::new())),
+                ];
 
                 egui_tiles::Tree::new("manager_tree", tiles.insert_tab_tile(tileids), tiles)
             },
@@ -120,7 +114,7 @@ pub struct ManagerBehavior<'a>
     materials: ResMut<'a, Assets<ColorMaterial>>,
 }
 
-impl<'a> egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'a>
+impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
 {
     fn pane_ui(
         &mut self,
@@ -292,10 +286,7 @@ pub fn fill_from_points(
         RenderAssetUsages::RENDER_WORLD,
     )
     // Add the point positions as an attribute
-    .with_inserted_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        points.iter().map(|point| *point).collect::<Vec<Vec3>>(),
-    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, points.to_vec())
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0., 0., 1.]; points.len()])
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0., 0.]; points.len()]);
 
@@ -542,16 +533,13 @@ pub fn main_ui(
 
                                         ui_state.command_line_input_index += 1;
                                     }
-                                    else {
-                                        if ui_state.command_line_input_index as i32
-                                            <= ui_state.command_line_inputs.len() as i32 - 1
-                                        {
-                                            ui_state.command_line_buffer = ui_state
-                                                .command_line_inputs
-                                                [ui_state.command_line_input_index]
-                                                .clone();
-                                            ui_state.command_line_input_index += 1;
-                                        }
+                                    else if (ui_state.command_line_input_index as i32)
+                                        < ui_state.command_line_inputs.len() as i32
+                                    {
+                                        ui_state.command_line_buffer = ui_state.command_line_inputs
+                                            [ui_state.command_line_input_index]
+                                            .clone();
+                                        ui_state.command_line_input_index += 1;
                                     }
                                 }
 
