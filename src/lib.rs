@@ -13,7 +13,9 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
-use geo::{coord, ConcaveHull, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon, Within};
+use geo::{
+    coord, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon,
+};
 use mlua::{Error, Lua};
 use parking_lot::RwLock;
 
@@ -475,7 +477,7 @@ pub fn init_lua_functions(
                     for (idx, line) in lines.iter().enumerate() {
                         for (current_checked_idx, checked_line) in checked_lines.iter().enumerate() {
                             if idx as isize - 1 != current_checked_idx as isize && checked_lines.len() > 2 {
-                                if let Some(intersection_pos) = line.intersects(&checked_line) {
+                                if let Some(intersection_pos) = line.intersects(checked_line) {
                                     let intersected_line_idx = checked_lines.iter().position(|line| line == checked_line).unwrap();
                                     let mut polygon_points: Vec<Coord> = vec![];
 
