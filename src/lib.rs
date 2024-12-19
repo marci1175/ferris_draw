@@ -13,7 +13,7 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
-use geo::{coord, Contains, ConvexHull, Coord, LineString, Point};
+use geo::{coord, ConcaveHull, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon, Within};
 use mlua::{Error, Lua};
 use parking_lot::RwLock;
 
@@ -471,40 +471,36 @@ pub fn init_lua_functions(
                     }
 
                     let mut checked_lines: Vec<Line> = vec![];
-                    let mut was_last_intersection_check_true = false;
                     
-                    for line in lines.clone() {
-                        //The circle made by the lines
-                        let mut positions: Vec<Coord> = vec![];
-                        
-                        for checked_line in checked_lines.clone() {
-                            if let Some(intersect_point) = line.intersects(&checked_line) {
-                                // If the checked line is intersected by the line that means that the first line to the circle is the one that got checked and the last is the line we checked it with
-                                was_last_intersection_check_true = true;
+                    for (idx, line) in lines.iter().enumerate() {
+                        for (current_checked_idx, checked_line) in checked_lines.iter().enumerate() {
+                            if idx as isize - 1 != current_checked_idx as isize && checked_lines.len() > 2 {
+                                if let Some(intersection_pos) = line.intersects(&checked_line) {
+                                    let intersected_line_idx = checked_lines.iter().position(|line| line == checked_line).unwrap();
+                                    let mut polygon_points: Vec<Coord> = vec![];
 
-                                positions.push(coord! {x: intersect_point.x as f64, y: intersect_point.y as f64});
-                            }
-                            else if was_last_intersection_check_true || *lines.last().unwrap() == line {
-                                was_last_intersection_check_true = false;
-                                
-                                if positions.len() > 2 {
-                                    let polygon = geo::Polygon::new(LineString::new(positions.clone()), vec![]);
+                                    polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
 
-                                    let is_drawer_in_shape =
-                                        polygon.convex_hull().contains(&Point::new(
-                                            selected_drawer.pos.x as f64,
-                                            selected_drawer.pos.y as f64,
-                                        ));
+                                    for poly_line in &checked_lines[intersected_line_idx..idx - 1] {
+                                        polygon_points.push(coord! {x: poly_line.max.x as f64, y: poly_line.max.y as f64});
+                                    }
 
-                                        dbg!(is_drawer_in_shape);
-                                        panic!();
+                                    let polygon = Polygon::new(LineString::new(polygon_points), vec![]);
+
+                                    let poly_convex_hull = polygon.convex_hull();
+
+                                    dbg!(poly_convex_hull.contains(dbg!(&Point::new(selected_drawer.pos.x as f64,selected_drawer.pos.y as f64))));
+                                    dbg!(polygon);
+                                    panic!();
+
+                                    checked_lines.clear();
+                                    break;
                                 }
                             }
-                        }
+                        }                        
 
-                        checked_lines.push(line);
+                        checked_lines.push(line.clone());                        
                     }
-                    // panic!();
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
@@ -572,9 +568,6 @@ impl Line
         if (other_line.max.x - other_line.min.x) == 0. {
             m2 = 0.;
         }
-
-        dbg!(other_line);
-        dbg!(self);
 
         if other_line.max == self.min || self.min == other_line.min {
             return Some(Vec3::new(self.min.x, self.min.y, 0.));
