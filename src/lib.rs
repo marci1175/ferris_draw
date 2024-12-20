@@ -1,23 +1,41 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{mpsc::{channel, Receiver, Sender}, Arc},
 };
 
 use bevy::{
     asset::RenderAssetUsages,
     color::Color,
     math::{Vec2, Vec3, Vec4},
-    prelude::{Component, Mesh, ResMut, Resource},
+    prelude::{Component, Mesh, Res, ResMut, Resource},
     render::mesh::PrimitiveTopology,
     text::cosmic_text::Angle,
 };
 pub mod ui;
 use dashmap::DashMap;
 use geo::{
-    coord, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon,
+    coord, point, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon
 };
 use mlua::{Error, Lua};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use ui::fill_from_points;
+
+#[derive(Resource, Clone)]
+pub struct DrawRequester { 
+    pub receiver: Arc<Mutex<Receiver<(Vec<Vec3>, Color, String)>>>,
+    pub sender: Arc<Sender<(Vec<Vec3>, Color, String)>>
+}
+
+impl Default for DrawRequester
+{
+    fn default() -> Self
+    {
+        let (sender, receiver) = channel::<(Vec<Vec3>, Color, String)>();
+        Self {
+            sender: Arc::new(sender), receiver: Arc::new(Mutex::new(receiver))
+        }
+    }
+}
 
 #[derive(Resource, Clone)]
 pub struct LuaRuntime(pub Lua);
@@ -59,7 +77,7 @@ pub enum ScriptLinePrompts
 }
 
 #[derive(Component)]
-pub struct DrawerMesh(pub String);
+pub struct DrawerMesh;
 
 /// A list of points that will have a line drawn between each consecutive points
 #[derive(Debug, Clone, Default)]
@@ -128,10 +146,16 @@ pub struct Drawer
     pub ang: Angle,
 
     /// The line drawn by the drawer.
-    pub lines: Vec<LineStrip>,
+    pub drawings: Vec<DrawingType>,
 
     /// The color of the Drawer.
     pub color: Color,
+}
+
+#[derive(Clone, Debug)]
+pub enum DrawingType {
+    Line(LineStrip),
+    Polygon((Vec<Vec3>, Color)),
 }
 
 impl Default for Drawer
@@ -142,9 +166,9 @@ impl Default for Drawer
             enabled: true,
             pos: Vec2::default(),
             ang: Angle::from_degrees(90.),
-            lines: vec![LineStrip {
+            drawings: vec![DrawingType::Line(LineStrip {
                 points: vec![(Vec3::default(), Color::WHITE)],
-            }],
+            })],
             color: Color::WHITE,
         }
     }
@@ -180,6 +204,7 @@ impl DerefMut for Drawers
 /// This function automaticly adds all the functions to the global variables.
 pub fn init_lua_functions(
     lua_rt: ResMut<LuaRuntime>,
+    draw_requester: Res<DrawRequester>,
     drawers_handle: Drawers,
     output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
 )
@@ -252,8 +277,10 @@ pub fn init_lua_functions(
                     //Reset the drawer's position.
                     drawer.pos = Vec2::default();
 
+                    let drawer_color =  drawer.color.clone();
+
                     //Add the reseted pos to the drawer
-                    drawer.lines = vec![LineStrip::new(vec![(Vec3::default(), Color::WHITE)])];
+                    drawer.drawings.push(DrawingType::Line(LineStrip { points: vec![(Vec3::default(), drawer_color)] }));
 
                     //Reset the drawer's angle.
                     drawer.ang = Angle::from_degrees(90.);
@@ -333,11 +360,8 @@ pub fn init_lua_functions(
                     //Store the new position and the drawer's color if it is enabled
                     if drawer.enabled {
                         drawer
-                            .lines
-                            .last_mut()
-                            .unwrap()
-                            .points
-                            .push((Vec3 { x, y, z: 0. }, drawer_color));
+                            .drawings
+                            .push(DrawingType::Line(LineStrip { points: vec![(Vec3::new(x, y, 0.), drawer_color)] }));
                     }
 
                     //Set the new drawers position.
@@ -362,10 +386,10 @@ pub fn init_lua_functions(
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
 
-                drawer.lines = vec![LineStrip::new(vec![(
+                drawer.drawings = vec![DrawingType::Line(LineStrip::new(vec![(
                     Vec3::new(drawer.pos.x, drawer.pos.y, 0.),
-                    Color::WHITE,
-                )])];
+                    Color::WHITE, 
+                )]))];
             }
 
             Ok(())
@@ -416,7 +440,7 @@ pub fn init_lua_functions(
 
                     let tuple = (Vec3::new(drawer.pos.x, drawer.pos.y, 0.), drawer.color);
 
-                    drawer.lines.push(LineStrip::new(vec![tuple]));
+                    drawer.drawings.push(DrawingType::Line(LineStrip::new(vec![tuple])));
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
@@ -448,28 +472,37 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    
+    let draw_request_sender = draw_requester.sender.clone();
 
     let fill = lua_vm
         .create_function(move |_, id: String| {
             match drawers_clone.get(&id) {
                 Some(selected_drawer) => {
-                    let drawer_lines: Vec<LineStrip> = drawers_clone
+                    let drawer_lines: Vec<Vec3> = drawers_clone
                         .iter()
                         .flat_map(|pair| {
                             let drawer = pair.value();
-
-                            drawer.lines.clone()
+                            
+                            drawer.drawings.clone().iter().flat_map(|drawing| {
+                                match drawing {
+                                    DrawingType::Line(line_strip) => {
+                                        line_strip.points.iter().map(|points| points.0).collect::<Vec<Vec3>>()
+                                    },
+                                    DrawingType::Polygon(points) => {
+                                        points.0.clone()
+                                    },
+                                }
+                            }).collect::<Vec<_>>()
                         })
                         .collect();
 
                     let mut lines: Vec<Line> = vec![];
 
-                    for drawer_line in drawer_lines {
-                            for line_pos in drawer_line.points.windows(2) {
-                                let ((min, _), (max, _)) = (line_pos[0], line_pos[1]);
+                    for positions in drawer_lines.windows(2) {
+                                let (min, max) = (positions[0], positions[1]);
     
                                 lines.push(Line::new(min, max));
-                            }
                     }
 
                     let mut checked_lines: Vec<Line> = vec![];
@@ -483,17 +516,17 @@ pub fn init_lua_functions(
 
                                     polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
 
-                                    for poly_line in &checked_lines[intersected_line_idx..idx - 1] {
+                                    for poly_line in &checked_lines[intersected_line_idx..idx] {
                                         polygon_points.push(coord! {x: poly_line.max.x as f64, y: poly_line.max.y as f64});
                                     }
 
-                                    let polygon = Polygon::new(LineString::new(polygon_points), vec![]);
+                                    let polygon = Polygon::new(LineString::new(polygon_points.clone()), vec![]);
 
                                     let poly_convex_hull = polygon.convex_hull();
 
-                                    dbg!(poly_convex_hull.contains(dbg!(&Point::new(selected_drawer.pos.x as f64,selected_drawer.pos.y as f64))));
-                                    dbg!(polygon);
-                                    panic!();
+                                    if poly_convex_hull.contains(&point!(x: selected_drawer.pos.x as f64, y: selected_drawer.pos.y as f64)) {
+                                        draw_request_sender.send((polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
+                                    }
 
                                     checked_lines.clear();
                                     break;

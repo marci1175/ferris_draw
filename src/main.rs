@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use bevy::{
-    asset::embedded_asset,
+    asset::{embedded_asset, RenderAssetUsages},
     math::Quat,
     prelude::PluginGroup,
     text::cosmic_text::Angle,
@@ -21,9 +21,7 @@ use bevy::{
 };
 use bevy_egui::EguiPlugin;
 use ferris_draw::{
-    init_lua_functions,
-    ui::{main_ui, UiState},
-    DrawerMesh, Drawers, LuaRuntime,
+    init_lua_functions, ui::{fill_from_points, main_ui, UiState}, DrawRequester, DrawerMesh, Drawers, LuaRuntime
 };
 use miniz_oxide::deflate::CompressionLevel;
 
@@ -42,6 +40,7 @@ fn main()
     .init_resource::<UiState>()
     .init_resource::<Drawers>()
     .init_resource::<LuaRuntime>()
+    .init_resource::<DrawRequester>()
     .add_systems(Startup, setup)
     .add_systems(PreUpdate, clear_screen)
     .add_systems(Update, main_ui)
@@ -57,6 +56,7 @@ fn setup(
     mut commands: Commands,
     drawers: Res<Drawers>,
     mut ui_state: ResMut<UiState>,
+    draw_requested: Res<DrawRequester>,
     lua_runtime: ResMut<LuaRuntime>,
 )
 {
@@ -83,6 +83,7 @@ fn setup(
 
     init_lua_functions(
         lua_runtime,
+        draw_requested,
         drawers.clone(),
         ui_state.command_line_outputs.clone(),
     );
@@ -114,22 +115,38 @@ fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     drawers: Res<Drawers>,
+    draw_requester: Res<DrawRequester>,
     asset_server: Res<AssetServer>,
 )
 {
+    // Try to receive draw requests from the lua runtime
+    if let Ok((points, color, id)) = draw_requester.receiver.lock().try_recv() {
+        if let Some(mut drawer) = drawers.get_mut(&id) {
+            drawer.drawings.push(ferris_draw::DrawingType::Polygon((points, color)));
+        }
+    }
+
     for drawer in drawers.iter() {
-        let (id, drawer_info) = drawer.pair();
+        let (_id, drawer_info) = drawer.pair();
 
-        for line in &drawer_info.lines {
-            let mesh = Mesh::from(line.clone());
+        for drawing_type in &drawer_info.drawings {
+            match drawing_type {
+                ferris_draw::DrawingType::Line(line_strip) => {
+                    let mesh = Mesh::from(line_strip.clone());
 
-            let shape = meshes.add(mesh);
+                    let shape = meshes.add(mesh);
 
-            commands.spawn((
-                Mesh2d(shape),
-                MeshMaterial2d(materials.add(drawer_info.color)),
-                DrawerMesh(id.clone()),
-            ));
+                    commands.spawn((
+                        Mesh2d(shape),
+                        MeshMaterial2d(materials.add(drawer_info.color)),
+                        DrawerMesh,
+                    ));
+                },
+                ferris_draw::DrawingType::Polygon((points, color)) => {
+                    fill_from_points(&mut commands, &mut meshes, &mut materials, points.to_vec(), *color);
+                },
+            }
+            
         }
 
         let icon: bevy::prelude::Handle<bevy::prelude::Image> =
@@ -142,7 +159,7 @@ fn draw(
                     Angle::from_degrees(drawer.ang.to_degrees() - 90.).to_radians(),
                 ))
                 .with_scale(vec3(0.1, 0.1, 1.)),
-            DrawerMesh(id.clone()),
+            DrawerMesh,
         ));
     }
 }

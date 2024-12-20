@@ -264,15 +264,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
     }
 }
 
-pub fn fill_from_points(
-    points: Vec<Vec3>,
-    color: Color,
-    id: String,
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-)
-{
+pub fn fill_from_points(commands: &mut Commands<'_, '_>, meshes: &mut ResMut<'_, Assets<Mesh>>, materials: &mut ResMut<'_, Assets<ColorMaterial>>, points: Vec<bevy::prelude::Vec3>, color: bevy::prelude::Color) {
     let mut indices = vec![];
 
     for i in 1..points.len() - 1 {
@@ -297,9 +289,10 @@ pub fn fill_from_points(
     commands.spawn((
         Mesh2d(shape),
         MeshMaterial2d(materials.add(color)),
-        DrawerMesh(id.clone()),
+        DrawerMesh,
     ));
 }
+
 
 pub fn main_ui(
     mut ui_state: ResMut<UiState>,
