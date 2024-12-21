@@ -16,7 +16,7 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
-use geo::{coord, point, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon};
+use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
 use mlua::{Error, Lua};
 use parking_lot::{Mutex, RwLock};
 
@@ -568,7 +568,8 @@ pub fn init_lua_functions(
                     }
 
                     let mut checked_lines: Vec<Line> = vec![];
-                    
+                    let mut valid_polygons: Vec<Polygon> = vec![];
+
                     for (idx, line) in lines.iter().enumerate() {
                         for (current_checked_idx, checked_line) in checked_lines.iter().enumerate() {
                             if idx as isize - 1 != current_checked_idx as isize && checked_lines.len() > 2 {
@@ -578,7 +579,7 @@ pub fn init_lua_functions(
 
                                     // polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
 
-                                    for poly_line in &checked_lines[intersected_line_idx + 1..idx] {
+                                    for poly_line in &checked_lines[intersected_line_idx..idx] {
                                         polygon_points.push(coord! {x: poly_line.max.x as f64, y: poly_line.max.y as f64});
                                     }
 
@@ -587,16 +588,19 @@ pub fn init_lua_functions(
                                     let poly_convex_hull = polygon.convex_hull();
 
                                     if poly_convex_hull.contains(&point!(x: selected_drawer.pos.x as f64, y: selected_drawer.pos.y as f64)) {
-                                        draw_request_sender.send((dbg!(polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>()), selected_drawer.color, id.clone())).unwrap();
+                                        valid_polygons.push(polygon);
                                     }
-
-                                    break;
                                 }
                             }
-                        }                        
+                        }
 
                         checked_lines.push(line.clone());                        
                     }
+
+                    if let Some(valid_polygon) = valid_polygons.last() {
+                        draw_request_sender.send((<geo::Polygon as Clone>::clone(&valid_polygon).into_inner().0.coords().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
+                    }
+
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
@@ -687,8 +691,19 @@ impl Line
 
         // Calculate the y-coordinate of the intersection point using either line's equation
         let intersection_y = m1 * intersection_x + b1;
+        let intersection_point = Vec3::new(intersection_x, intersection_y, 0.);
 
-        Some(Vec3::new(intersection_x, intersection_y, 0.))
+        if !self.is_point_on_segment(&intersection_point) || !other_line.is_point_on_segment(&intersection_point) {
+            return None;
+        }
+
+        return Some(Vec3::new(intersection_x, intersection_y, 0.));
+    }
+
+    fn is_point_on_segment(&self, point: &Vec3) -> bool {
+        let within_x_bounds = point.x >= self.min.x.min(self.max.x) && point.x <= self.min.x.max(self.max.x);
+        let within_y_bounds = point.y >= self.min.y.min(self.max.y) && point.y <= self.min.y.max(self.max.y);
+        within_x_bounds && within_y_bounds
     }
 }
 
