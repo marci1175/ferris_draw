@@ -200,12 +200,22 @@ pub struct Drawer
     pub color: Color,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Drawings
 {
     pub lines: Vec<LineStrip>,
     pub polygons: Vec<PolygonPoints>,
 }
+
+impl Default for Drawings {
+    fn default() -> Self {
+        Self {
+            lines: vec![LineStrip::new(vec![(Vec3::default(), Color::WHITE)])],
+            polygons: vec![],
+        }
+    }
+}
+
 
 #[derive(Clone, Debug)]
 pub enum DrawingType
@@ -222,10 +232,7 @@ impl Default for Drawer
             enabled: true,
             pos: Vec2::default(),
             ang: Angle::from_degrees(90.),
-            drawings: Drawings {
-                lines: vec![LineStrip::new(vec![((Vec3::default(), Color::WHITE))])],
-                polygons: vec![],
-            },
+            drawings: Drawings::default(),
             color: Color::WHITE,
         }
     }
@@ -279,7 +286,7 @@ pub fn init_lua_functions(
     let drawers_clone = drawers_handle.clone();
 
     // Creates a new drawer with the Drawer handle, from a unique handle.
-    let new_drawer = lua_vm
+    let new = lua_vm
         .create_function(move |_, id: String| {
             if !drawers_clone.contains_key(&id) {
                 drawers_clone.insert(id.clone(), Drawer::default());
@@ -448,7 +455,10 @@ pub fn init_lua_functions(
         .create_function(move |_, _: ()| {
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
-                drawer.drawings = Drawings::default();
+
+                let mut default_drawings = Drawings::default();
+                default_drawings.lines.push(LineStrip { points: vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)] });
+                drawer.drawings = default_drawings;
             }
 
             Ok(())
@@ -551,12 +561,10 @@ pub fn init_lua_functions(
 
                     let mut lines: Vec<Line> = vec![];
 
-                    for (idx, positions) in dbg!(drawer_lines).windows(2).enumerate().skip(1).step_by(2) {
-                        // if idx % 2 == 1 {
-                            let (min, max) = (positions[0], positions[1]);
+                    for (_idx, positions) in dbg!(drawer_lines).windows(2).enumerate() {
+                        let (min, max) = (positions[0], positions[1]);
 
-                            lines.push(Line::new(min, max));
-                        // }
+                        lines.push(Line::new(min, max));
                     }
 
                     let mut checked_lines: Vec<Line> = vec![];
@@ -568,9 +576,9 @@ pub fn init_lua_functions(
                                     let intersected_line_idx = checked_lines.iter().position(|line| line == checked_line).unwrap();
                                     let mut polygon_points: Vec<Coord> = vec![];
 
-                                    polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
+                                    // polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
 
-                                    for poly_line in &checked_lines[intersected_line_idx..idx] {
+                                    for poly_line in &checked_lines[intersected_line_idx + 1..idx] {
                                         polygon_points.push(coord! {x: poly_line.max.x as f64, y: poly_line.max.y as f64});
                                     }
 
@@ -580,8 +588,6 @@ pub fn init_lua_functions(
 
                                     if poly_convex_hull.contains(&point!(x: selected_drawer.pos.x as f64, y: selected_drawer.pos.y as f64)) {
                                         draw_request_sender.send((dbg!(polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>()), selected_drawer.color, id.clone())).unwrap();
-                                    
-                                    panic!()
                                     }
 
                                     break;
@@ -604,7 +610,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     //Set all the functions in the global handle of the lua runtime
-    lua_vm.globals().set("new", new_drawer).unwrap();
+    lua_vm.globals().set("new", new).unwrap();
     lua_vm.globals().set("remove", remove).unwrap();
     lua_vm.globals().set("drawers", drawers).unwrap();
     lua_vm.globals().set("rotate", rotate_drawer).unwrap();
