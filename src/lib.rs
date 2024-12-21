@@ -361,7 +361,7 @@ pub fn init_lua_functions(
                     if drawer.enabled {
                         drawer
                             .drawings
-                            .push(DrawingType::Line(LineStrip { points: vec![(Vec3::new(x, y, 0.), drawer_color)] }));
+                            .push(DrawingType::Line(LineStrip { points: vec![(Vec3::new(origin.x, origin.y, 0.), drawer_color), (Vec3::new(x, y, 0.), drawer_color)] }));
                     }
 
                     //Set the new drawers position.
@@ -385,7 +385,6 @@ pub fn init_lua_functions(
         .create_function(move |_, _: ()| {
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
-
                 drawer.drawings = vec![DrawingType::Line(LineStrip::new(vec![(
                     Vec3::new(drawer.pos.x, drawer.pos.y, 0.),
                     Color::WHITE, 
@@ -493,17 +492,21 @@ pub fn init_lua_functions(
                                         points.0.clone()
                                     },
                                 }
-                            }).collect::<Vec<_>>()
+                            }).collect::<Vec<Vec3>>()
                         })
                         .collect();
 
                     let mut lines: Vec<Line> = vec![];
 
-                    for positions in drawer_lines.windows(2) {
-                                let (min, max) = (positions[0], positions[1]);
-    
-                                lines.push(Line::new(min, max));
+                    for (idx, positions) in drawer_lines.windows(2).enumerate() {
+                        if idx % 2 == 1 {
+                            let (min, max) = (positions[0], positions[1]);
+
+                            lines.push(Line::new(min, max));
+                        }
                     }
+
+                    // panic!("{lines:?}");
 
                     let mut checked_lines: Vec<Line> = vec![];
                     
@@ -528,7 +531,8 @@ pub fn init_lua_functions(
                                         draw_request_sender.send((polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
                                     }
 
-                                    checked_lines.clear();
+                                    // checked_lines.clear();
+                                    // panic!("{idx} {polygon_points:?}");
                                     break;
                                 }
                             }
