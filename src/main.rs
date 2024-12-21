@@ -21,7 +21,9 @@ use bevy::{
 };
 use bevy_egui::EguiPlugin;
 use ferris_draw::{
-    init_lua_functions, ui::{fill_from_points, main_ui, UiState}, DrawRequester, DrawerMesh, Drawers, LuaRuntime
+    init_lua_functions,
+    ui::{main_ui, UiState},
+    DrawRequester, DrawerMesh, Drawers, LuaRuntime, PolygonPoints,
 };
 use miniz_oxide::deflate::CompressionLevel;
 
@@ -122,31 +124,38 @@ fn draw(
     // Try to receive draw requests from the lua runtime
     if let Ok((points, color, id)) = draw_requester.receiver.lock().try_recv() {
         if let Some(mut drawer) = drawers.get_mut(&id) {
-            drawer.drawings.push(ferris_draw::DrawingType::Polygon((points, color)));
+            drawer
+                .drawings
+                .polygons
+                .push(PolygonPoints::new(points, color));
         }
     }
 
     for drawer in drawers.iter() {
         let (_id, drawer_info) = drawer.pair();
 
-        for drawing_type in &drawer_info.drawings {
-            match drawing_type {
-                ferris_draw::DrawingType::Line(line_strip) => {
-                    let mesh = Mesh::from(line_strip.clone());
+        for line_strip in &drawer_info.drawings.lines {
+            let mesh = Mesh::from(line_strip.clone());
 
-                    let shape = meshes.add(mesh);
+            let shape = meshes.add(mesh);
 
-                    commands.spawn((
-                        Mesh2d(shape),
-                        MeshMaterial2d(materials.add(drawer_info.color)),
-                        DrawerMesh,
-                    ));
-                },
-                ferris_draw::DrawingType::Polygon((points, color)) => {
-                    fill_from_points(&mut commands, &mut meshes, &mut materials, points.to_vec(), *color);
-                },
-            }
-            
+            commands.spawn((
+                Mesh2d(shape),
+                MeshMaterial2d(materials.add(drawer_info.color)),
+                DrawerMesh,
+            ));
+        }
+
+        for polygon in &drawer_info.drawings.polygons {
+            let mesh = Mesh::from(polygon.clone());
+
+            let shape = meshes.add(mesh);
+
+            commands.spawn((
+                Mesh2d(shape),
+                MeshMaterial2d(materials.add(drawer_info.color)),
+                DrawerMesh,
+            ));
         }
 
         let icon: bevy::prelude::Handle<bevy::prelude::Image> =

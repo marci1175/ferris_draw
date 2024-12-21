@@ -264,36 +264,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
     }
 }
 
-pub fn fill_from_points(commands: &mut Commands<'_, '_>, meshes: &mut ResMut<'_, Assets<Mesh>>, materials: &mut ResMut<'_, Assets<ColorMaterial>>, points: Vec<bevy::prelude::Vec3>, color: bevy::prelude::Color) {
-    let mut indices = vec![];
-
-    for i in 1..points.len() - 1 {
-        indices.push(0);
-        indices.push(i as u32);
-        indices.push((i + 1) as u32);
-    }
-
-    let mut mesh = Mesh::new(
-        bevy::render::mesh::PrimitiveTopology::TriangleStrip,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    // Add the point positions as an attribute
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, points.to_vec())
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0., 0., 1.]; points.len()])
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0., 0.]; points.len()]);
-
-    mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
-
-    let shape = meshes.add(mesh);
-
-    commands.spawn((
-        Mesh2d(shape),
-        MeshMaterial2d(materials.add(color)),
-        DrawerMesh,
-    ));
-}
-
-
 pub fn main_ui(
     mut ui_state: ResMut<UiState>,
     mut contexts: EguiContexts<'_, '_>,

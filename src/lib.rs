@@ -1,6 +1,9 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{mpsc::{channel, Receiver, Sender}, Arc},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
 };
 
 use bevy::{
@@ -13,17 +16,15 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
-use geo::{
-    coord, point, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon
-};
+use geo::{coord, point, Contains, ConvexHull, Coord, Intersects, LineString, Point, Polygon};
 use mlua::{Error, Lua};
 use parking_lot::{Mutex, RwLock};
-use ui::fill_from_points;
 
 #[derive(Resource, Clone)]
-pub struct DrawRequester { 
+pub struct DrawRequester
+{
     pub receiver: Arc<Mutex<Receiver<(Vec<Vec3>, Color, String)>>>,
-    pub sender: Arc<Sender<(Vec<Vec3>, Color, String)>>
+    pub sender: Arc<Sender<(Vec<Vec3>, Color, String)>>,
 }
 
 impl Default for DrawRequester
@@ -32,7 +33,8 @@ impl Default for DrawRequester
     {
         let (sender, receiver) = channel::<(Vec<Vec3>, Color, String)>();
         Self {
-            sender: Arc::new(sender), receiver: Arc::new(Mutex::new(receiver))
+            sender: Arc::new(sender),
+            receiver: Arc::new(Mutex::new(receiver)),
         }
     }
 }
@@ -122,6 +124,52 @@ impl From<LineStrip> for Mesh
     }
 }
 
+/// A list of points that will have polygon created from them
+#[derive(Debug, Clone, Default)]
+pub struct PolygonPoints
+{
+    pub points: Vec<Vec3>,
+    pub color: Color,
+}
+
+impl PolygonPoints
+{
+    pub fn new(points: Vec<Vec3>, color: Color) -> Self
+    {
+        Self { points, color }
+    }
+}
+
+impl From<PolygonPoints> for Mesh
+{
+    fn from(line: PolygonPoints) -> Self
+    {
+        let mut indices = vec![];
+
+        for i in 1..line.points.len() - 1 {
+            indices.push(0);
+            indices.push(i as u32);
+            indices.push((i + 1) as u32);
+        }
+
+        let mut mesh = Mesh::new(
+            bevy::render::mesh::PrimitiveTopology::TriangleStrip,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        // Add the point positions as an attribute
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, line.points.to_vec())
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_NORMAL,
+            vec![[0., 0., 1.]; line.points.len()],
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0., 0.]; line.points.len()]);
+
+        mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+
+        mesh
+    }
+}
+
 pub fn color_into_vec4(color: Color) -> Vec4
 {
     Vec4::new(
@@ -146,16 +194,24 @@ pub struct Drawer
     pub ang: Angle,
 
     /// The line drawn by the drawer.
-    pub drawings: Vec<DrawingType>,
+    pub drawings: Drawings,
 
     /// The color of the Drawer.
     pub color: Color,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct Drawings
+{
+    pub lines: Vec<LineStrip>,
+    pub polygons: Vec<PolygonPoints>,
+}
+
 #[derive(Clone, Debug)]
-pub enum DrawingType {
+pub enum DrawingType
+{
     Line(LineStrip),
-    Polygon((Vec<Vec3>, Color)),
+    Polygon(PolygonPoints),
 }
 
 impl Default for Drawer
@@ -166,9 +222,10 @@ impl Default for Drawer
             enabled: true,
             pos: Vec2::default(),
             ang: Angle::from_degrees(90.),
-            drawings: vec![DrawingType::Line(LineStrip {
-                points: vec![(Vec3::default(), Color::WHITE)],
-            })],
+            drawings: Drawings {
+                lines: vec![LineStrip::new(vec![((Vec3::default(), Color::WHITE))])],
+                polygons: vec![],
+            },
             color: Color::WHITE,
         }
     }
@@ -277,10 +334,12 @@ pub fn init_lua_functions(
                     //Reset the drawer's position.
                     drawer.pos = Vec2::default();
 
-                    let drawer_color =  drawer.color.clone();
+                    let drawer_color = drawer.color.clone();
 
                     //Add the reseted pos to the drawer
-                    drawer.drawings.push(DrawingType::Line(LineStrip { points: vec![(Vec3::default(), drawer_color)] }));
+                    drawer.drawings.lines.push(LineStrip {
+                        points: vec![(Vec3::default(), drawer_color)],
+                    });
 
                     //Reset the drawer's angle.
                     drawer.ang = Angle::from_degrees(90.);
@@ -348,20 +407,24 @@ pub fn init_lua_functions(
                     let angle_rad = drawer.ang.to_radians();
 
                     // Forward units
-                    let transformation_factor = amount;
+                    let amount_forward = amount;
 
                     // The new x.
                     let x = origin.x
-                        + transformation_factor * floating_point_calculation_error(angle_rad.cos());
+                        + (amount_forward * floating_point_calculation_error(angle_rad.cos()));
                     // The new y.
                     let y = origin.y
-                        + transformation_factor * floating_point_calculation_error(angle_rad.sin());
+                        + (amount_forward * floating_point_calculation_error(angle_rad.sin()));
 
                     //Store the new position and the drawer's color if it is enabled
                     if drawer.enabled {
                         drawer
                             .drawings
-                            .push(DrawingType::Line(LineStrip { points: vec![(Vec3::new(origin.x, origin.y, 0.), drawer_color), (Vec3::new(x, y, 0.), drawer_color)] }));
+                            .lines
+                            .last_mut()
+                            .unwrap()
+                            .points
+                            .push((Vec3::new(x, y, 0.), drawer_color));
                     }
 
                     //Set the new drawers position.
@@ -385,10 +448,7 @@ pub fn init_lua_functions(
         .create_function(move |_, _: ()| {
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
-                drawer.drawings = vec![DrawingType::Line(LineStrip::new(vec![(
-                    Vec3::new(drawer.pos.x, drawer.pos.y, 0.),
-                    Color::WHITE, 
-                )]))];
+                drawer.drawings = Drawings::default();
             }
 
             Ok(())
@@ -439,7 +499,7 @@ pub fn init_lua_functions(
 
                     let tuple = (Vec3::new(drawer.pos.x, drawer.pos.y, 0.), drawer.color);
 
-                    drawer.drawings.push(DrawingType::Line(LineStrip::new(vec![tuple])));
+                    drawer.drawings.lines.push(LineStrip::new(vec![tuple]));
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
@@ -471,7 +531,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
-    
+
     let draw_request_sender = draw_requester.sender.clone();
 
     let fill = lua_vm
@@ -483,30 +543,21 @@ pub fn init_lua_functions(
                         .flat_map(|pair| {
                             let drawer = pair.value();
                             
-                            drawer.drawings.clone().iter().flat_map(|drawing| {
-                                match drawing {
-                                    DrawingType::Line(line_strip) => {
-                                        line_strip.points.iter().map(|points| points.0).collect::<Vec<Vec3>>()
-                                    },
-                                    DrawingType::Polygon(points) => {
-                                        points.0.clone()
-                                    },
-                                }
+                            drawer.drawings.clone().lines.iter().flat_map(|line_strip| {
+                                line_strip.points.iter().map(|points| points.0).collect::<Vec<Vec3>>()
                             }).collect::<Vec<Vec3>>()
                         })
                         .collect();
 
                     let mut lines: Vec<Line> = vec![];
 
-                    for (idx, positions) in drawer_lines.windows(2).enumerate() {
-                        if idx % 2 == 1 {
+                    for (idx, positions) in dbg!(drawer_lines).windows(2).enumerate().skip(1).step_by(2) {
+                        // if idx % 2 == 1 {
                             let (min, max) = (positions[0], positions[1]);
 
                             lines.push(Line::new(min, max));
-                        }
+                        // }
                     }
-
-                    // panic!("{lines:?}");
 
                     let mut checked_lines: Vec<Line> = vec![];
                     
@@ -528,11 +579,11 @@ pub fn init_lua_functions(
                                     let poly_convex_hull = polygon.convex_hull();
 
                                     if poly_convex_hull.contains(&point!(x: selected_drawer.pos.x as f64, y: selected_drawer.pos.y as f64)) {
-                                        draw_request_sender.send((polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
+                                        draw_request_sender.send((dbg!(polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>()), selected_drawer.color, id.clone())).unwrap();
+                                    
+                                    panic!()
                                     }
 
-                                    // checked_lines.clear();
-                                    // panic!("{idx} {polygon_points:?}");
                                     break;
                                 }
                             }
