@@ -25,35 +25,6 @@
 - Rotate the drawer to left and right.
 - Set the color of the lines the user is drawing.
 
-### Documentation
-
-1. **`new(String)`**  
-   Creates a new drawer object with the specified name.
-
-2. **`rotate(String, f32)`**  
-   Rotates the object identified by the given name by a specified angle (`f32`). The angle is in degrees.
-
-3. **`forward(String, f32)`**  
-   Moves the object identified by the given name forward by the specified distance (`f32`). The direction of movement depends on the current orientation of the object.
-
-4. **`center(String)`**  
-   Centers the object identified by the given name.
-
-5. **`color(String, f32, f32, f32, f32)`**  
-   Sets the color of the object identified by the given name. The parameters `f32, f32, f32, f32` represent red, green, blue, and alpha (opacity) values, each ranging from 0.0 to 1.0.
-
-6. **`wipe()`**
-   Wipes all drawings from the workspace.
-
-7. **`exists(String)`**
-   Returns whether the drawer exists with that specific ID.
-
-8. **`remove(String)`**
-   Removes the drawer object based on the ID.
-
-9. **`drawers()`**
-   Returns a list of the drawers' name.
-
 ### Project showcase
 **The application is subject to change, this video depicts the first release**
 https://youtu.be/NcGhhBk8_k4

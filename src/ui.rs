@@ -8,6 +8,7 @@ use bevy_egui::{
     EguiContexts,
 };
 use dashmap::DashMap;
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use miniz_oxide::deflate::CompressionLevel;
 use std::{collections::VecDeque, fs, sync::Arc};
 
@@ -66,6 +67,14 @@ pub struct UiState
     /// This DashMap contains the deleted scripts.
     /// Scripts deleted from there pernament.
     pub rubbish_bin: Arc<DashMap<String, String>>,
+
+    
+    /// The CommonMarkCache is a cache which stores data about the documentation displayer widget.
+    /// We need this to be able to display the documentation.
+    #[serde(skip)]
+    common_mark_cache: CommonMarkCache,
+
+    documentation_window: bool,
 }
 
 impl Default for UiState
@@ -92,6 +101,8 @@ impl Default for UiState
             command_line_inputs: VecDeque::new(),
             command_line_input_index: 0,
             rubbish_bin: Arc::new(DashMap::new()),
+            common_mark_cache: CommonMarkCache::default(),
+            documentation_window: false,
         }
     }
 }
@@ -331,6 +342,18 @@ pub fn main_ui(
 
     ui_state.toasts.lock().show(ctx);
 
+    let mut documentation_window_is_open = ui_state.documentation_window;
+
+    egui::Window::new("Application Documentation")
+        .open(&mut documentation_window_is_open)
+        .show(ctx, |ui| {
+            ScrollArea::both().show(ui, |ui| {
+                CommonMarkViewer::new().show(ui, &mut ui_state.common_mark_cache, include_str!("../DOCUMENTATION.md"));
+            });
+        });
+
+        ui_state.documentation_window = documentation_window_is_open;
+
     bevy_egui::egui::TopBottomPanel::top("top_panel")
         .resizable(true)
         .show(ctx, |ui| {
@@ -339,7 +362,7 @@ pub fn main_ui(
                     if ui.button("Save project").clicked() {
                         if let Some(save_path) = rfd::FileDialog::new()
                             .set_file_name("new_save")
-                            .add_filter("Save file", &["dat"])
+                            .add_filter("Save file", &["data"])
                             .save_file()
                         {
                             let compressed_data = miniz_oxide::deflate::compress_to_vec(
@@ -359,7 +382,7 @@ pub fn main_ui(
 
                     if ui.button("Open project").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Save file", &["dat"])
+                            .add_filter("Open file", &["data"])
                             .pick_file()
                         {
                             match fs::read(path) {
@@ -389,6 +412,10 @@ pub fn main_ui(
                     ui.checkbox(&mut ui_state.manager_panel, "Item Manager");
                     ui.checkbox(&mut ui_state.command_panel, "Command Panel");
                 });
+
+                if ui.button("Documentation").clicked() {
+                    ui_state.documentation_window = !ui_state.documentation_window;
+                }
             });
         });
 
@@ -554,7 +581,7 @@ pub fn main_ui(
                                         ui_state.command_line_input_index += 1;
                                     }
                                 }
-
+                                
                                 if down_was_pressed {
                                     if ui_state.command_line_input_index
                                         == ui_state.command_line_inputs.len()
