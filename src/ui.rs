@@ -1,14 +1,13 @@
 use bevy::{
-    asset::{Assets, RenderAssetUsages},
-    color::Color,
-    math::Vec3,
-    prelude::{Commands, Mesh, Mesh2d, Res, ResMut},
-    sprite::{ColorMaterial, MeshMaterial2d},
+    asset::Assets,
+    prelude::{Commands, Mesh, Res, ResMut},
+    sprite::ColorMaterial,
 };
 use bevy_egui::{
     egui::{self, vec2, Color32, Key, RichText, ScrollArea, TextEdit, UiBuilder},
     EguiContexts,
 };
+use dashmap::DashMap;
 use miniz_oxide::deflate::CompressionLevel;
 use std::{collections::VecDeque, fs, sync::Arc};
 
@@ -19,8 +18,9 @@ use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
 use indexmap::{map::MutableKeys, IndexMap};
 
-use crate::{DrawerMesh, Drawers, LuaRuntime, ScriptLinePrompts};
+use crate::{Drawers, LuaRuntime, ScriptLinePrompts};
 
+/// This struct stores the UI's state, and is initalized from a save file.
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct UiState
@@ -35,26 +35,37 @@ pub struct UiState
     #[serde(skip)]
     toasts: Arc<Mutex<Toasts>>,
 
+    /// This text buffer is used when renaming an existing script.
     #[serde(skip)]
     rename_buffer: Arc<Mutex<String>>,
 
+    /// This text buffer is used when creating a new script.
     #[serde(skip)]
     name_buffer: Arc<Mutex<String>>,
 
+    /// The buffer which is used to store the text entered into the command line.
     #[serde(skip)]
     command_line_buffer: String,
 
     /// The manager panel's tab state.
     pub item_manager: egui_tiles::Tree<ManagerPane>,
 
+    /// The command line outputs / inputs.
+    /// These are displayed to the user.
     #[serde(skip)]
     pub command_line_outputs: Arc<RwLock<Vec<ScriptLinePrompts>>>,
 
+    /// The commands entered in the command line.
     #[serde(skip)]
     pub command_line_inputs: VecDeque<String>,
 
+    /// This is used to track the command line history's index.
     #[serde(skip)]
     pub command_line_input_index: usize,
+
+    /// This DashMap contains the deleted scripts.
+    /// Scripts deleted from there pernament.
+    pub rubbish_bin: Arc<DashMap<String, String>>,
 }
 
 impl Default for UiState
@@ -80,6 +91,7 @@ impl Default for UiState
             command_line_buffer: String::new(),
             command_line_inputs: VecDeque::new(),
             command_line_input_index: 0,
+            rubbish_bin: Arc::new(DashMap::new()),
         }
     }
 }
@@ -88,13 +100,15 @@ impl Default for UiState
 #[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub enum ManagerPane
 {
+    /// The scripts tab.
     Scripts(IndexMap<String, String>),
+    /// The entity manager tab.
     #[default]
     EntityManager,
 }
 
 /// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
-pub struct ManagerBehavior<'a>
+pub struct ManagerBehavior
 {
     /// The [`mlua::Lua`] runtime handle, this can be used to run code on.
     pub lua_runtime: LuaRuntime,
@@ -105,16 +119,18 @@ pub struct ManagerBehavior<'a>
     /// The field is used to display the current number of drawers.
     drawers: Drawers,
 
+    /// This text buffer is used when creating a new script.
     name_buffer: Arc<Mutex<String>>,
 
+    /// This text buffer is used when renaming an existing script.
     rename_buffer: Arc<Mutex<String>>,
 
-    commands: Commands<'a, 'a>,
-    meshes: ResMut<'a, Assets<Mesh>>,
-    materials: ResMut<'a, Assets<ColorMaterial>>,
+    /// This DashMap contains the deleted scripts.
+    /// Scripts deleted from there pernament.
+    rubbish_bin: Arc<DashMap<String, String>>,
 }
 
-impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
+impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 {
     fn pane_ui(
         &mut self,
@@ -153,7 +169,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
 
                 let scripts_clone = scripts.clone();
 
-                ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                ScrollArea::both().max_height(ui.available_height() - 200.).auto_shrink([false, false]).show(ui, |ui| {
                     scripts.retain2(|name, script| {
                         let mut should_keep = true;
                         ui.horizontal(|ui| {
@@ -197,7 +213,11 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
                                         );
                                     });
                                     if ui.button("Delete").clicked() {
+                                        // Flag the script as to be deleted
                                         should_keep = false;
+
+                                        //Insert the script into the rubbish bin
+                                        self.rubbish_bin.insert(name.clone(), script.clone());
                                     }
                                     let menu_button = ui.menu_button("Rename script", |ui| {
                                         ui.text_edit_singleline(&mut *self.rename_buffer.lock());
@@ -217,9 +237,43 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior<'_>
                                 });
                             });
                         });
+
                         should_keep
                     });
                 });
+
+                ui.collapsing(
+                    format!("Deleted Scripts: {}", self.rubbish_bin.len()),
+                    |ui| {
+                        ScrollArea::both().show(ui, |ui| {
+                            self.rubbish_bin.retain(|name, script| {
+                                let mut should_be_retained = true;
+
+                                ui.horizontal(|ui| {
+                                    ui.label(name);
+                                    if ui
+                                        .button(RichText::from("Delete").color(Color32::RED))
+                                        .clicked()
+                                    {
+                                        // Flag it to be deleted finally.
+                                        should_be_retained = false;
+                                    };
+
+                                    if ui.button("Restore").clicked() {
+                                        // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
+                                        scripts.insert(name.clone(), script.clone());
+
+                                        // Flag it to be deleted finally from this hashmap.
+                                        should_be_retained = false;
+                                    };
+                                });
+
+                                // Return the final value.
+                                should_be_retained
+                            });
+                        });
+                    },
+                );
             },
             ManagerPane::EntityManager => {
                 ScrollArea::both()
@@ -269,9 +323,6 @@ pub fn main_ui(
     mut contexts: EguiContexts<'_, '_>,
     lua_runtime: ResMut<LuaRuntime>,
     drawers: Res<Drawers>,
-    commands: Commands,
-    meshes: ResMut<Assets<Mesh>>,
-    materials: ResMut<Assets<ColorMaterial>>,
 )
 {
     let ctx = contexts.ctx_mut();
@@ -346,7 +397,7 @@ pub fn main_ui(
             .resizable(true)
             .show(ctx, |ui| {
                 let toasts = ui_state.toasts.clone();
-
+                let rubbish_bin = ui_state.rubbish_bin.clone();
                 let rename_buffer = ui_state.rename_buffer.clone();
                 let name_buffer = ui_state.name_buffer.clone();
 
@@ -357,9 +408,7 @@ pub fn main_ui(
                         drawers: drawers.clone(),
                         rename_buffer,
                         name_buffer,
-                        commands,
-                        meshes,
-                        materials,
+                        rubbish_bin,
                     },
                     ui,
                 );

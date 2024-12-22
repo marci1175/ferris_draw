@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use bevy::{
-    asset::{embedded_asset, RenderAssetUsages},
+    asset::embedded_asset,
     math::Quat,
     prelude::PluginGroup,
     text::cosmic_text::Angle,

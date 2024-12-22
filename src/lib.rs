@@ -207,15 +207,16 @@ pub struct Drawings
     pub polygons: Vec<PolygonPoints>,
 }
 
-impl Default for Drawings {
-    fn default() -> Self {
+impl Default for Drawings
+{
+    fn default() -> Self
+    {
         Self {
             lines: vec![LineStrip::new(vec![(Vec3::default(), Color::WHITE)])],
             polygons: vec![],
         }
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub enum DrawingType
@@ -341,7 +342,7 @@ pub fn init_lua_functions(
                     //Reset the drawer's position.
                     drawer.pos = Vec2::default();
 
-                    let drawer_color = drawer.color.clone();
+                    let drawer_color = drawer.color;
 
                     //Add the reseted pos to the drawer
                     drawer.drawings.lines.push(LineStrip {
@@ -457,7 +458,9 @@ pub fn init_lua_functions(
                 let drawer = drawer.value_mut();
 
                 let mut default_drawings = Drawings::default();
-                default_drawings.lines.push(LineStrip { points: vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)] });
+                default_drawings.lines.push(LineStrip {
+                    points: vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)],
+                });
                 drawer.drawings = default_drawings;
             }
 
@@ -561,15 +564,14 @@ pub fn init_lua_functions(
 
                     let mut lines: Vec<Line> = vec![];
 
-                    for (_idx, positions) in dbg!(drawer_lines).windows(2).enumerate() {
+                    for positions in dbg!(drawer_lines).windows(2) {
                         let (min, max) = (positions[0], positions[1]);
 
                         lines.push(Line::new(min, max));
                     }
 
                     let mut checked_lines: Vec<Line> = vec![];
-                    let mut valid_polygons: Vec<Polygon> = vec![];
-
+                        
                     for (idx, line) in lines.iter().enumerate() {
                         for (current_checked_idx, checked_line) in checked_lines.iter().enumerate() {
                             if idx as isize - 1 != current_checked_idx as isize && checked_lines.len() > 2 {
@@ -588,19 +590,16 @@ pub fn init_lua_functions(
                                     let poly_convex_hull = polygon.convex_hull();
 
                                     if poly_convex_hull.contains(&point!(x: selected_drawer.pos.x as f64, y: selected_drawer.pos.y as f64)) {
-                                        valid_polygons.push(polygon);
+                                        draw_request_sender.send((polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
                                     }
+
+                                    break;
                                 }
                             }
-                        }
+                        }                        
 
                         checked_lines.push(line.clone());                        
                     }
-
-                    if let Some(valid_polygon) = valid_polygons.last() {
-                        draw_request_sender.send((<geo::Polygon as Clone>::clone(&valid_polygon).into_inner().0.coords().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
-                    }
-
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
@@ -693,16 +692,19 @@ impl Line
         let intersection_y = m1 * intersection_x + b1;
         let intersection_point = Vec3::new(intersection_x, intersection_y, 0.);
 
-        if !self.is_point_on_segment(&intersection_point) || !other_line.is_point_on_segment(&intersection_point) {
-            return None;
-        }
+        // if !self.is_point_on_segment(&intersection_point) || !other_line.is_point_on_segment(&intersection_point) {
+        //     return None;
+        // }
 
-        return Some(Vec3::new(intersection_x, intersection_y, 0.));
+        Some(Vec3::new(intersection_x, intersection_y, 0.))
     }
 
-    fn is_point_on_segment(&self, point: &Vec3) -> bool {
-        let within_x_bounds = point.x >= self.min.x.min(self.max.x) && point.x <= self.min.x.max(self.max.x);
-        let within_y_bounds = point.y >= self.min.y.min(self.max.y) && point.y <= self.min.y.max(self.max.y);
+    fn is_point_on_segment(&self, point: &Vec3) -> bool
+    {
+        let within_x_bounds =
+            point.x >= self.min.x.min(self.max.x) && point.x <= self.min.x.max(self.max.x);
+        let within_y_bounds =
+            point.y >= self.min.y.min(self.max.y) && point.y <= self.min.y.max(self.max.y);
         within_x_bounds && within_y_bounds
     }
 }
