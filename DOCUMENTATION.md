@@ -3,10 +3,10 @@
 ## This documentation will talk about the following
 
 - [Information about the Application](#introduction-to-the-application)
-- The script API
-  - Utility functions
-  - Controlling the drawer(s)
-  - Interacting with the user
+- [The scripting API](#introduction-to-the-scripting-api)
+  - [Utility functions](#utility-functions)
+  - [Graphical functions](#graphical-functions)
+  - [Interacting with the user](#interacting-with-the-user)
 
 Examples will be show thorughout the documentation to help the reader.
 
@@ -30,7 +30,7 @@ Before beginning production of the most beautiful drawings, one must know what t
 - Red (Toolbox): Opens up the toolbox menu where different parts of the ui can be enabled or disabled.
 - Yellow (Documentation): Opens up the documentation window in the Application.
 
-**The different parts of the User Interface:**
+#### The different parts of the User Interface
 
 ![uiparts_image](assets/documentation/ui_parts.png)
 
@@ -41,10 +41,32 @@ Before beginning production of the most beautiful drawings, one must know what t
   - The `Scripts` tab is used to display the currently existing [Scripts](#scripts-tab) and the deleted scripts in the rubbish bin.
 - Green (Canvas): The canvas is where the user can draw freely. This part of the UI is managed purely by the bevy game engine.
 
+## Important information about the Application
+
+Before diving into the Scripting API, we need to get familiar with the Application's uniqueness.
+
+### Drawers
+
+Drawers are what allow the user to paint on the canvas. Every drawer has a unique identification (In a String format). Thats why one must pay attention when scripting with multiple drawers as it's important to know which drawer we would like to control. All drawers are controlled separately, and can have different positions, drawing colors, states.
+
+**The Drawer's icon.**
+
+![drawer_icon](assets/ferris.png)
+
+### Drawers tab
+
+The Drawers tab displays all currently alive Drawers. This includes their position, drawing color, state.
+
+![drawer_instance](assets/documentation/drawer_instance.png)
+
 ## Introduction to the Scripting API
 
 Scripting in this Application is made possible by [mlua](https://github.com/mlua-rs/mlua), therefor it is running lua as it's programming language.
-There will be examples to most of the functions listed.
+There will be examples to most of the functions listed. If an invalid drawer ID is provided the functions will all fail.
+
+### Scripts tab
+
+The scripting tab is depicted in the [GUI showcase](#the-different-parts-of-the-user-interface). Scripts can be edited and ran through the Application (Syntax highlighting is also avilable). They can aslo be renamed, and deleted (Deleted scripts can be restored from the rubbish bin).
 
 ### Utility functions
 
@@ -97,11 +119,73 @@ drawers() --Output: [] (The list is empty because there arent any drawers)
 
 ### Graphical functions
 
-2. **`rotate(String, f32)`**  
+Graphical functions involve drawing on the canvas or manipulating the [drawer(s)](#drawers). All of the function below require the drawer's id as their first agrument.
+
+1. **`rotate(String, f32)`**  
    Rotates the object identified by the given name by a specified angle (`f32`). The angle is in degrees.
 
-3. **`forward(String, f32)`**  
+2. **`forward(String, f32)`**  
    Moves the object identified by the given name forward by the specified distance (`f32`). The direction of movement depends on the current orientation of the object.
 
-5. **`color(String, f32, f32, f32, f32)`**  
+3. **`color(String, f32, f32, f32, f32)`**  
    Sets the color of the object identified by the given name. The parameters `f32, f32, f32, f32` represent red, green, blue, and alpha (opacity) values, each ranging from 0.0 to 1.0.
+
+4. **`enable(String)`**
+    Enables the drawer so that it will draw when moved in any direction.
+
+5. **`disable(String)`**
+    Disables the drawer so that it will not draw when moved in any direction.
+
+**The example showing the usage of these functions.**
+
+```lua
+-- Check if the "drawer1" drawer already exists, if not create one.
+if not exists("drawer1") then
+    new("drawer1")
+end
+
+-- Set the color of the drawer
+color("drawer1", 1, 1, 1, 1)
+
+-- Move the drawer forward 100 units.
+forward("drawer1", 100)
+
+-- Rotate the drawer 100 degrees.
+rotate("drawer1", 100)
+
+-- Move the drawer forward 100 units.
+forward("drawer1", 100)
+```
+
+![graphics_function_output](assets/documentation/graphics_function_output.png)
+
+### Interacting with the user
+
+Currently the user can only receive output from the script, however user input may be made possible in future updates. There are multiple ways of interacting with the user thorugh the Application, this includes sending notifications, and printing to the console. Script can also interact with the user through FFI allowed by the lua runtime.
+
+1. **`notification(u32, String)`**
+    Displays a notification to the user in the Application.
+    The supported notification types are:
+    - 1: Information
+    - 2: Warning
+    - 3: Error
+    - 4: Success
+    - _: Custom notification type
+
+2. **`print(String)`**
+    Prints a String into the console.
+
+**Example code showcasing all of the ways of communicating with the user.**
+
+```rs
+notification(1, "Hello world!")
+notification(2, "Hello world!")
+notification(3, "Hello world!")
+notification(4, "Hello world!")
+
+print("Hello world!")
+```
+
+![notification_showcase](assets/documentation/notification_showcase.png)
+
+![console_print](assets/documentation/console_print.png)

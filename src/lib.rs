@@ -16,6 +16,7 @@ use bevy::{
 };
 pub mod ui;
 use dashmap::DashMap;
+use egui_toast::{Toast, Toasts};
 use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
 use mlua::{Error, Lua};
 use parking_lot::{Mutex, RwLock};
@@ -272,6 +273,7 @@ pub fn init_lua_functions(
     draw_requester: Res<DrawRequester>,
     drawers_handle: Drawers,
     output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+    toast_handle: Arc<Mutex<Toasts>>,
 )
 {
     let lua_vm = lua_rt.clone();
@@ -612,6 +614,39 @@ pub fn init_lua_functions(
         })
         .unwrap();
 
+    
+    let toasts_handle = toast_handle.clone();
+
+    let notification = lua_vm
+        .create_function(move |_, params: (u32, String)| {
+            let (notification_type, text) = params;
+
+            let toast = Toast::new();
+
+            let toast = match notification_type {
+                1 => {
+                    toast.kind(egui_toast::ToastKind::Info)
+                }
+                2 => {
+                    toast.kind(egui_toast::ToastKind::Success)
+                }
+                3 => {
+                    toast.kind(egui_toast::ToastKind::Error)
+                }
+                4 => {
+                    toast.kind(egui_toast::ToastKind::Warning)
+                }
+                _ => {
+                    toast.kind(egui_toast::ToastKind::Custom(notification_type))
+                }
+            }.text(text);
+
+            toasts_handle.lock().add(toast);
+
+            Ok(())
+        })
+        .unwrap();
+
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new).unwrap();
     lua_vm.globals().set("remove", remove).unwrap();
@@ -626,6 +661,7 @@ pub fn init_lua_functions(
     lua_vm.globals().set("enable", enable).unwrap();
     lua_vm.globals().set("disable", disable).unwrap();
     lua_vm.globals().set("fill", fill).unwrap();
+    lua_vm.globals().set("notification", notification).unwrap();
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

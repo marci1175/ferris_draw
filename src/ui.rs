@@ -1,14 +1,10 @@
-use bevy::{
-    asset::Assets,
-    prelude::{Commands, Mesh, Res, ResMut},
-    sprite::ColorMaterial,
-};
+use bevy::prelude::{Res, ResMut};
 use bevy_egui::{
     egui::{self, vec2, Color32, Key, RichText, ScrollArea, TextEdit, UiBuilder},
     EguiContexts,
 };
 use dashmap::DashMap;
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui_commonmark::{commonmark_str, CommonMarkCache};
 use miniz_oxide::deflate::CompressionLevel;
 use std::{collections::VecDeque, fs, sync::Arc};
 
@@ -34,19 +30,19 @@ pub struct UiState
 
     /// Egui notifications
     #[serde(skip)]
-    toasts: Arc<Mutex<Toasts>>,
+    pub toasts: Arc<Mutex<Toasts>>,
 
     /// This text buffer is used when renaming an existing script.
     #[serde(skip)]
-    rename_buffer: Arc<Mutex<String>>,
+    pub rename_buffer: Arc<Mutex<String>>,
 
     /// This text buffer is used when creating a new script.
     #[serde(skip)]
-    name_buffer: Arc<Mutex<String>>,
+    pub name_buffer: Arc<Mutex<String>>,
 
     /// The buffer which is used to store the text entered into the command line.
     #[serde(skip)]
-    command_line_buffer: String,
+    pub command_line_buffer: String,
 
     /// The manager panel's tab state.
     pub item_manager: egui_tiles::Tree<ManagerPane>,
@@ -72,9 +68,9 @@ pub struct UiState
     /// The CommonMarkCache is a cache which stores data about the documentation displayer widget.
     /// We need this to be able to display the documentation.
     #[serde(skip)]
-    common_mark_cache: CommonMarkCache,
+    pub common_mark_cache: CommonMarkCache,
 
-    documentation_window: bool,
+    pub documentation_window: bool,
 }
 
 impl Default for UiState
@@ -217,11 +213,13 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             ui.fonts(|f| f.layout_job(layout_job))
                                         };
 
-                                        ui.add(
-                                            TextEdit::multiline(script)
-                                                .code_editor()
-                                                .layouter(&mut layouter),
-                                        );
+                                        ScrollArea::both().show(ui, |ui| {
+                                            ui.add(
+                                                TextEdit::multiline(script)
+                                                    .code_editor()
+                                                    .layouter(&mut layouter),
+                                            );
+                                        });
                                     });
                                     if ui.button("Delete").clicked() {
                                         // Flag the script as to be deleted
@@ -256,7 +254,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                 ui.collapsing(
                     format!("Deleted Scripts: {}", self.rubbish_bin.len()),
                     |ui| {
-                        ScrollArea::both().show(ui, |ui| {
+                        ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                             self.rubbish_bin.retain(|name, script| {
                                 let mut should_be_retained = true;
 
@@ -348,7 +346,7 @@ pub fn main_ui(
         .open(&mut documentation_window_is_open)
         .show(ctx, |ui| {
             ScrollArea::both().show(ui, |ui| {
-                CommonMarkViewer::new().show(ui, &mut ui_state.common_mark_cache, include_str!("../DOCUMENTATION.md"));
+                commonmark_str!(ui, &mut ui_state.common_mark_cache, "DOCUMENTATION.md");
             });
         });
 
