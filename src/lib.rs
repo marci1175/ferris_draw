@@ -645,7 +645,7 @@ pub fn init_lua_functions(
 
             Ok(())
         })
-        .unwrap();
+        .unwrap();7ONm@ON0|2fYl?v>ABSD
 
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new).unwrap();
