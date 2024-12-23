@@ -127,13 +127,13 @@ impl From<LineStrip> for Mesh
 
 /// A list of points that will have polygon created from them
 #[derive(Debug, Clone, Default)]
-pub struct PolygonPoints
+pub struct FilledPolygonPoints
 {
     pub points: Vec<Vec3>,
     pub color: Color,
 }
 
-impl PolygonPoints
+impl FilledPolygonPoints
 {
     pub fn new(points: Vec<Vec3>, color: Color) -> Self
     {
@@ -141,9 +141,9 @@ impl PolygonPoints
     }
 }
 
-impl From<PolygonPoints> for Mesh
+impl From<FilledPolygonPoints> for Mesh
 {
-    fn from(line: PolygonPoints) -> Self
+    fn from(line: FilledPolygonPoints) -> Self
     {
         let mut indices = vec![];
 
@@ -205,7 +205,7 @@ pub struct Drawer
 pub struct Drawings
 {
     pub lines: Vec<LineStrip>,
-    pub polygons: Vec<PolygonPoints>,
+    pub polygons: Vec<FilledPolygonPoints>,
 }
 
 impl Default for Drawings
@@ -223,7 +223,7 @@ impl Default for Drawings
 pub enum DrawingType
 {
     Line(LineStrip),
-    Polygon(PolygonPoints),
+    Polygon(FilledPolygonPoints),
 }
 
 impl Default for Drawer
@@ -546,7 +546,6 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
-
     let draw_request_sender = draw_requester.sender.clone();
 
     let fill = lua_vm
@@ -581,9 +580,9 @@ pub fn init_lua_functions(
                                     let intersected_line_idx = checked_lines.iter().position(|line| line == checked_line).unwrap();
                                     let mut polygon_points: Vec<Coord> = vec![];
 
-                                    // polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
+                                    polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
 
-                                    for poly_line in &checked_lines[intersected_line_idx..idx] {
+                                    for poly_line in &checked_lines[intersected_line_idx + 1..idx] {
                                         polygon_points.push(coord! {x: poly_line.max.x as f64, y: poly_line.max.y as f64});
                                     }
 
@@ -614,7 +613,6 @@ pub fn init_lua_functions(
         })
         .unwrap();
 
-    
     let toasts_handle = toast_handle.clone();
 
     let notification = lua_vm
@@ -624,28 +622,79 @@ pub fn init_lua_functions(
             let toast = Toast::new();
 
             let toast = match notification_type {
-                1 => {
-                    toast.kind(egui_toast::ToastKind::Info)
-                }
-                2 => {
-                    toast.kind(egui_toast::ToastKind::Success)
-                }
-                3 => {
-                    toast.kind(egui_toast::ToastKind::Error)
-                }
-                4 => {
-                    toast.kind(egui_toast::ToastKind::Warning)
-                }
-                _ => {
-                    toast.kind(egui_toast::ToastKind::Custom(notification_type))
-                }
-            }.text(text);
+                1 => toast.kind(egui_toast::ToastKind::Info),
+                2 => toast.kind(egui_toast::ToastKind::Success),
+                3 => toast.kind(egui_toast::ToastKind::Error),
+                4 => toast.kind(egui_toast::ToastKind::Warning),
+                _ => toast.kind(egui_toast::ToastKind::Custom(notification_type)),
+            }
+            .text(text);
 
             toasts_handle.lock().add(toast);
 
             Ok(())
         })
-        .unwrap();7ONm@ON0|2fYl?v>ABSD
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let position = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get(&id) {
+                Some(drawer) => {
+                    return Ok((drawer.pos.x, drawer.pos.y));
+                },
+                None => {
+                    return Err(Error::RuntimeError(format!(
+                        "The drawer with handle {id} doesn't exist."
+                    )));
+                },
+            }
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let rectangle = lua_vm
+        .create_function(move |_, params: (String, f32, f32)| {
+            let (id, desired_x, desired_y) = params;
+
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    let current_position = drawer.pos.clone();
+
+                    let current_color = drawer.color;
+                    drawer.drawings.polygons.push(FilledPolygonPoints {
+                        points: vec![
+                            Vec3::new(current_position.x, current_position.y, 0.),
+                            Vec3::new(
+                                current_position.x + (desired_x - current_position.x),
+                                current_position.y,
+                                0.,
+                            ),
+                            Vec3::new(
+                                current_position.x + (desired_x - current_position.x),
+                                current_position.y + (desired_y - current_position.y),
+                                0.,
+                            ),
+                            Vec3::new(
+                                current_position.x,
+                                current_position.y + (desired_y - current_position.y),
+                                0.,
+                            ),
+                        ],
+                        color: current_color,
+                    });
+                },
+                None => {
+                    return Err(Error::RuntimeError(format!(
+                        "The drawer with handle {id} doesn't exist."
+                    )));
+                },
+            }
+            Ok(())
+        })
+        .unwrap();
 
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new).unwrap();
@@ -662,6 +711,8 @@ pub fn init_lua_functions(
     lua_vm.globals().set("disable", disable).unwrap();
     lua_vm.globals().set("fill", fill).unwrap();
     lua_vm.globals().set("notification", notification).unwrap();
+    lua_vm.globals().set("position", position).unwrap();
+    lua_vm.globals().set("rectangle", rectangle).unwrap();
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -728,9 +779,11 @@ impl Line
         let intersection_y = m1 * intersection_x + b1;
         let intersection_point = Vec3::new(intersection_x, intersection_y, 0.);
 
-        // if !self.is_point_on_segment(&intersection_point) || !other_line.is_point_on_segment(&intersection_point) {
-        //     return None;
-        // }
+        if !self.is_point_on_segment(&intersection_point)
+            || !other_line.is_point_on_segment(&intersection_point)
+        {
+            return None;
+        }
 
         Some(Vec3::new(intersection_x, intersection_y, 0.))
     }

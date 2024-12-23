@@ -64,7 +64,6 @@ pub struct UiState
     /// Scripts deleted from there pernament.
     pub rubbish_bin: Arc<DashMap<String, String>>,
 
-    
     /// The CommonMarkCache is a cache which stores data about the documentation displayer widget.
     /// We need this to be able to display the documentation.
     #[serde(skip)]
@@ -155,20 +154,40 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                         let name_buffer = &mut *self.name_buffer.lock();
 
                         ui.add_enabled_ui(!name_buffer.is_empty(), |ui| {
-                            let add_button = ui.button("Add");
+                            ui.menu_button("Add Script", |ui| {
+                                let add_button = ui.button("Add");
 
-                            if add_button.clicked() {
-                                if !scripts.contains_key(&*name_buffer) {
-                                    scripts.insert(name_buffer.clone(), String::from(""));
-                                    name_buffer.clear();
+                                if add_button.clicked() {
+                                    if !scripts.contains_key(&*name_buffer) && !self.rubbish_bin.contains_key(&*name_buffer) {
+                                        scripts.insert(name_buffer.clone(), String::from(""));
+                                        name_buffer.clear();
+                                    }
+                                    else {
+                                        self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("The script named: {name_buffer} already exists. Please choose another name or rename an existing script.")));
+                                    }
                                 }
-                                else {
-                                    self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("The script named: {name_buffer} already exists. Please choose another name or rename an existing script.")));
+
+                                ui.text_edit_singleline(name_buffer);
+                                
+                                ui.separator();
+
+                                if ui.button("Add from file").clicked() {
+                                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                        match fs::read_to_string(&path) {
+                                            Ok(file_content) => {
+                                                scripts.insert(path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(), file_content);
+                                            },
+                                            Err(_err) => {
+                                                self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Reading from file ({}) failed: {_err}", path.display())));
+                                            },
+                                        }
+                                    }
                                 }
-                            }
+                            });
+                            
+                            
                         });
 
-                        ui.text_edit_singleline(name_buffer);
                     });
                 });
 
@@ -243,6 +262,15 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     if menu_button.response.clicked() {
                                         *self.rename_buffer.lock() = name.clone();
                                     }
+                                
+                                    if ui.button("Export as File").clicked() {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .set_file_name(name.clone())
+                                            .add_filter("Lua", &["lua"])
+                                            .pick_folder() {
+                                                fs::write(path, script.clone()).unwrap();
+                                            }
+                                    }
                                 });
                             });
                         });
@@ -254,33 +282,35 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                 ui.collapsing(
                     format!("Deleted Scripts: {}", self.rubbish_bin.len()),
                     |ui| {
-                        ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                            self.rubbish_bin.retain(|name, script| {
-                                let mut should_be_retained = true;
+                        ScrollArea::both()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                self.rubbish_bin.retain(|name, script| {
+                                    let mut should_be_retained = true;
 
-                                ui.horizontal(|ui| {
-                                    ui.label(name);
-                                    if ui
-                                        .button(RichText::from("Delete").color(Color32::RED))
-                                        .clicked()
-                                    {
-                                        // Flag it to be deleted finally.
-                                        should_be_retained = false;
-                                    };
+                                    ui.horizontal(|ui| {
+                                        ui.label(name);
+                                        if ui
+                                            .button(RichText::from("Delete").color(Color32::RED))
+                                            .clicked()
+                                        {
+                                            // Flag it to be deleted finally.
+                                            should_be_retained = false;
+                                        };
 
-                                    if ui.button("Restore").clicked() {
-                                        // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
-                                        scripts.insert(name.clone(), script.clone());
+                                        if ui.button("Restore").clicked() {
+                                            // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
+                                            scripts.insert(name.clone(), script.clone());
 
-                                        // Flag it to be deleted finally from this hashmap.
-                                        should_be_retained = false;
-                                    };
+                                            // Flag it to be deleted finally from this hashmap.
+                                            should_be_retained = false;
+                                        };
+                                    });
+
+                                    // Return the final value.
+                                    should_be_retained
                                 });
-
-                                // Return the final value.
-                                should_be_retained
                             });
-                        });
                     },
                 );
             },
@@ -350,7 +380,7 @@ pub fn main_ui(
             });
         });
 
-        ui_state.documentation_window = documentation_window_is_open;
+    ui_state.documentation_window = documentation_window_is_open;
 
     bevy_egui::egui::TopBottomPanel::top("top_panel")
         .resizable(true)
@@ -442,16 +472,19 @@ pub fn main_ui(
 
     if ui_state.command_panel {
         bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
+            .default_height(100.)
+            .min_height(60.)
             .resizable(true)
             .show(ctx, |ui| {
-                let (_id, rect) = ui.allocate_space(vec2(ui.available_width(), 170.));
+                let (_id, rect) =
+                    ui.allocate_space(vec2(ui.available_width(), ui.available_height()));
 
                 ui.painter().rect_filled(rect, 5.0, Color32::BLACK);
 
                 ui.allocate_new_ui(UiBuilder::new().max_rect(rect.shrink(10.)), |ui| {
                     ScrollArea::both()
                         .auto_shrink([false, false])
-                        .max_height(120.)
+                        .max_height(ui.available_height() - 30.)
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for output in ui_state.command_line_outputs.read().iter() {
@@ -579,7 +612,7 @@ pub fn main_ui(
                                         ui_state.command_line_input_index += 1;
                                     }
                                 }
-                                
+
                                 if down_was_pressed {
                                     if ui_state.command_line_input_index
                                         == ui_state.command_line_inputs.len()

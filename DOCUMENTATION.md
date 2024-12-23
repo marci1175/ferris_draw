@@ -88,6 +88,9 @@ The scripting tab is depicted in the [GUI showcase](#the-different-parts-of-the-
 6. **`drawers()`**
    Returns a list of the drawers' name.
 
+7. **`position(String)`**
+   Returns the position of the drawer in (x, y) format.
+
 **The example usage of these functions.**
 
 ```lua
@@ -106,6 +109,9 @@ drawers() --Output: ["drawer1"]
 
 -- Drawer1 will return to its original position (0, 0, 0).
 center("drawer1")
+
+-- Get the position of drawer1
+position("drawer1") --Output: (0, 0) as it was just centered.
 
 -- Deleted all of the drawings of all of the drawers.
 wipe()
@@ -131,11 +137,13 @@ Graphical functions involve drawing on the canvas or manipulating the [drawer(s)
    Sets the color of the object identified by the given name. The parameters `f32, f32, f32, f32` represent red, green, blue, and alpha (opacity) values, each ranging from 0.0 to 1.0.
 
 4. **`enable(String)`**
-    Enables the drawer so that it will draw when moved in any direction.
+   Enables the drawer so that it will draw when moved in any direction.
 
 5. **`disable(String)`**
-    Disables the drawer so that it will not draw when moved in any direction.
+   Disables the drawer so that it will not draw when moved in any direction.
 
+6. **`rectangle(String, f32, f32)`**
+   Draws a rectangle from the relative position of the drawer. The position is in the (x, y) format.
 **The example showing the usage of these functions.**
 
 ```lua

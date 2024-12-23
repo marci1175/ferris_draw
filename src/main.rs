@@ -23,7 +23,7 @@ use bevy_egui::EguiPlugin;
 use ferris_draw::{
     init_lua_functions,
     ui::{main_ui, UiState},
-    DrawRequester, DrawerMesh, Drawers, LuaRuntime, PolygonPoints,
+    DrawRequester, DrawerMesh, Drawers, FilledPolygonPoints, LuaRuntime,
 };
 use miniz_oxide::deflate::CompressionLevel;
 
@@ -130,7 +130,7 @@ fn draw(
             drawer
                 .drawings
                 .polygons
-                .push(PolygonPoints::new(points, color));
+                .push(FilledPolygonPoints::new(points, color));
         }
     }
 
