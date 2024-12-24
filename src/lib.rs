@@ -1,9 +1,8 @@
 use std::{
-    ops::{Deref, DerefMut},
-    sync::{
+    fmt::Display, ops::{Deref, DerefMut}, sync::{
         mpsc::{channel, Receiver, Sender},
         Arc,
-    },
+    }
 };
 
 use bevy::{
@@ -20,6 +19,176 @@ use egui_toast::{Toast, Toasts};
 use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
 use mlua::{Error, Lua};
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DemoBuffer<T>
+{
+    pub resource: Arc<RwLock<T>>,
+    pub buffer_state: Arc<RwLock<DemoBufferState>>,
+}
+
+#[derive(PartialEq, Default, serde::Serialize, serde::Deserialize, Clone, Copy)]
+pub enum DemoBufferState {
+    Playback,
+    Record,
+
+    #[default]
+    None,
+}
+
+impl<T> DemoBuffer<T>
+{
+    pub fn new(inner: T) -> Self
+    {
+        Self {
+            // Create an `Arc<Mutex<T>>` for the buffer.
+            resource: Arc::new(RwLock::new(inner)),
+            // Initalize the buffer state with Default (None).
+            buffer_state: Arc::new(RwLock::new(DemoBufferState::default())),
+        }
+    }
+
+    pub fn set_buffer(&self, buffer: T) {
+        *self.resource.write() = buffer;
+    }
+
+    pub fn get_state_if_eq(&self, buffer_state: DemoBufferState) -> Option<&RwLock<T>>
+    {
+        if *self.buffer_state.read() == buffer_state {
+            return Some(&self.resource);
+        }
+
+        None
+    }
+
+    pub fn get_state(&self) -> DemoBufferState {
+        *self.buffer_state.read()
+    }
+
+    pub fn set_state(&self, state: DemoBufferState) {
+        *self.buffer_state.write() = state;
+    }
+}
+
+/// The DemoInstance is used to store demos of scripts.
+/// These contain a script identifier, so that we can notify the user if their code has changed since the last demo recording.
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct DemoInstance
+{
+    pub demo_steps: Vec<DemoStep>,
+    pub script_identifier: String,
+}
+
+/// The items of this enum contain the functions a user can call on their turtles.
+/// When recording a demo these are stored and can later be playbacked.
+/// All of the arguments to the functions are contained in the enum variants.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub enum DemoStep
+{
+    New(String),
+    Center(String),
+    Forward(String, f32),
+    Rotate(String, f32),
+    Color(String, f32, f32, f32, f32),
+    Wipe,
+    Remove(String),
+    Disable(String),
+    Enable(String),
+    Fill(String),
+    Rectangle(String, f32, f32),
+}
+
+impl DemoStep {
+    pub fn execute_lua_function(&self, lua_rt: ResMut<LuaRuntime>) -> Result<(), Error> {
+        match self {
+            DemoStep::New(id) => {
+                lua_rt.load(format!(r#"new("{id}")"#)).exec()
+            },
+            DemoStep::Center(id) => {
+                lua_rt.load(format!(r#"center("{id}")"#)).exec()
+
+            },
+            DemoStep::Forward(id, amnt) => {
+                lua_rt.load(format!(r#"forward("{id}", {amnt})"#)).exec()
+
+            },
+            DemoStep::Rotate(id, amnt) => {
+                lua_rt.load(format!(r#"rotate("{id}", {amnt})"#)).exec()
+
+            },
+            DemoStep::Color(id, r, g, b, a) => {
+                lua_rt.load(format!(r#"new("{id}", {r}, {g}, {b}, {a})"#)).exec()
+
+            },
+            DemoStep::Wipe => {
+                lua_rt.load(format!(r#"wipe()"#)).exec()
+
+            },
+            DemoStep::Remove(id) => {
+                lua_rt.load(format!(r#"remove("{id}")"#)).exec()
+
+            },
+            DemoStep::Disable(id) => {
+                lua_rt.load(format!(r#"disable("{id}")"#)).exec()
+
+            },
+            DemoStep::Enable(id) => {
+                lua_rt.load(format!(r#"enable("{id}")"#)).exec()
+
+            },
+            DemoStep::Fill(id) => {
+                lua_rt.load(format!(r#"fill("{id}")"#)).exec()
+
+            },
+            DemoStep::Rectangle(id, desired_x, desired_y) => {
+                lua_rt.load(format!(r#"rectangle("{id}", {desired_x}, {desired_y})"#)).exec()
+            },
+        }
+    }
+}
+
+impl Display for DemoStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            &match self {
+                DemoStep::New(id) => {
+                    format!(r#"new("{id}")"#)
+                },
+                DemoStep::Center(id) => {
+                    format!(r#"center("{id}")"#)
+                },
+                DemoStep::Forward(id, amount) => {
+                    format!(r#"forward("{id}", {amount})"#)
+                },
+                DemoStep::Rotate(id, amount) => {
+                    format!(r#"rotate("{id}", {amount})"#)
+                },
+                DemoStep::Color(id, r, g, b, a) => {
+                    format!(r#"color("{id}", {r}, {g}, {b}, {a})"#)
+                },
+                DemoStep::Wipe => {
+                    format!(r#"wipe()"#)
+                },
+                DemoStep::Remove(id) => {
+                    format!(r#"remove("{id}")"#)
+                },
+                DemoStep::Disable(id) => {
+                    format!(r#"disable("{id}")"#)
+                },
+                DemoStep::Enable(id) => {
+                    format!(r#"disable("{id}")"#)
+                },
+                DemoStep::Fill(id) => {
+                    format!(r#"fill("{id}")"#)
+                },
+                DemoStep::Rectangle(id, desired_x, desired_y) => {
+                    format!(r#"rectangle("{id}", {desired_x}, {desired_y})"#)
+                },
+            }
+        )
+    }
+}
 
 #[derive(Resource, Clone)]
 pub struct DrawRequester
@@ -273,6 +442,7 @@ pub fn init_lua_functions(
     draw_requester: Res<DrawRequester>,
     drawers_handle: Drawers,
     output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+    demo_buffer: DemoBuffer<Vec<DemoStep>>,
     toast_handle: Arc<Mutex<Toasts>>,
 )
 {
@@ -287,11 +457,16 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     // Creates a new drawer with the Drawer handle, from a unique handle.
     let new = lua_vm
         .create_function(move |_, id: String| {
             if !drawers_clone.contains_key(&id) {
+                if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                    buffer.write().push(DemoStep::New(id.clone()));
+                }
+
                 drawers_clone.insert(id.clone(), Drawer::default());
             }
             else {
@@ -305,6 +480,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     // Sets the drawer's angle.
     let rotate_drawer = lua_vm
@@ -317,6 +493,12 @@ pub fn init_lua_functions(
 
             match drawer_handle {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Rotate(id, degrees));
+
+                        return Ok(());
+                    }
+
                     // Set the drawer's angle.
                     drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + degrees);
                 },
@@ -333,6 +515,8 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
     // Resets the drawers position and angle.
     let center = lua_vm
         .create_function(move |_, id: String| {
@@ -341,6 +525,12 @@ pub fn init_lua_functions(
 
             match drawer_handle {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Center(id));
+
+                        return Ok(());
+                    }
+
                     //Reset the drawer's position.
                     drawer.pos = Vec2::default();
 
@@ -366,6 +556,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     // Sets the color of the drawing
     let color = lua_vm
@@ -378,6 +569,14 @@ pub fn init_lua_functions(
 
             match drawer_handle {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer
+                            .write()
+                            .push(DemoStep::Color(id, red, green, blue, alpha));
+
+                        return Ok(());
+                    }
+
                     // Set the drawer's color
                     drawer.color = Color::linear_rgba(red, green, blue, alpha);
                 },
@@ -394,6 +593,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     // Moves the drawer forward by a set amount of units, this makes the drawer draw too.
     let forward = lua_vm
@@ -406,6 +606,12 @@ pub fn init_lua_functions(
 
             match drawer_handle {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Forward(id, amount));
+
+                        return Ok(());
+                    }
+
                     // Calculate the difference on the y and x coordinate from its angle.
                     // Get origin
                     let origin = drawer.pos;
@@ -453,9 +659,16 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let wipe = lua_vm
         .create_function(move |_, _: ()| {
+            if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                buffer.write().push(DemoStep::Wipe);
+
+                return Ok(());
+            }
+
             for mut drawer in drawers_clone.iter_mut() {
                 let drawer = drawer.value_mut();
 
@@ -477,6 +690,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let remove = lua_vm
         .create_function(move |_, id: String| {
@@ -484,6 +698,12 @@ pub fn init_lua_functions(
                 return Err(Error::RuntimeError(format!(
                     "The drawer with handle {id} doesn't exist."
                 )));
+            }
+
+            if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                buffer.write().push(DemoStep::Remove(id));
+
+                return Ok(());
             }
 
             Ok(())
@@ -505,11 +725,18 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let enable = lua_vm
         .create_function(move |_, id: String| {
             match drawers_clone.get_mut(&id) {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Enable(id));
+
+                        return Ok(());
+                    }
+
                     drawer.enabled = true;
 
                     let tuple = (Vec3::new(drawer.pos.x, drawer.pos.y, 0.), drawer.color);
@@ -527,11 +754,18 @@ pub fn init_lua_functions(
         })
         .unwrap();
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let disable = lua_vm
         .create_function(move |_, id: String| {
             match drawers_clone.get_mut(&id) {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Disable(id));
+
+                        return Ok(());
+                    }
+
                     drawer.enabled = false;
                 },
                 None => {
@@ -547,11 +781,18 @@ pub fn init_lua_functions(
 
     let drawers_clone = drawers_handle.clone();
     let draw_request_sender = draw_requester.sender.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let fill = lua_vm
         .create_function(move |_, id: String| {
             match drawers_clone.get(&id) {
                 Some(selected_drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Fill(id));
+    
+                        return Ok(());
+                    }
+
                     let drawer_lines: Vec<Vec3> = drawers_clone
                         .iter()
                         .flat_map(|pair| {
@@ -614,9 +855,14 @@ pub fn init_lua_functions(
         .unwrap();
 
     let toasts_handle = toast_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let notification = lua_vm
         .create_function(move |_, params: (u32, String)| {
+            if demo_buffer_handle.get_state() == DemoBufferState::Record {
+                return Ok(());
+            }
+
             let (notification_type, text) = params;
 
             let toast = Toast::new();
@@ -654,6 +900,7 @@ pub fn init_lua_functions(
         .unwrap();
 
     let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let rectangle = lua_vm
         .create_function(move |_, params: (String, f32, f32)| {
@@ -661,6 +908,14 @@ pub fn init_lua_functions(
 
             match drawers_clone.get_mut(&id) {
                 Some(mut drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer
+                            .write()
+                            .push(DemoStep::Rectangle(id, desired_x, desired_y));
+
+                        return Ok(());
+                    }
+
                     let current_position = drawer.pos.clone();
 
                     let current_color = drawer.color;

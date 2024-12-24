@@ -84,12 +84,14 @@ fn setup(
     commands.spawn(Camera2d);
 
     let toast_handle = ui_state.toasts.clone();
+    let demo_buffer_handle = ui_state.demo_buffer.clone();
 
     init_lua_functions(
         lua_runtime,
         draw_requested,
         drawers.clone(),
         ui_state.command_line_outputs.clone(),
+        demo_buffer_handle,
         toast_handle,
     );
 }
