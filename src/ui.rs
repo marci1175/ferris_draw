@@ -1,12 +1,15 @@
-use bevy::{prelude::{Res, ResMut}, tasks::futures_lite::stream::FlatMap};
+use bevy::prelude::{Res, ResMut};
 use bevy_egui::{
-    egui::{self, vec2, Color32, Key, RichText, ScrollArea, TextEdit, UiBuilder},
+    egui::{
+        self, vec2, Color32, ImageButton, Key, Layout, Pos2, Rect, RichText, ScrollArea, Stroke,
+        TextEdit, UiBuilder, Window,
+    },
     EguiContexts,
 };
 use dashmap::DashMap;
 use egui_commonmark::{commonmark_str, CommonMarkCache};
 use miniz_oxide::deflate::CompressionLevel;
-use std::{collections::VecDeque, fs, sync::Arc, thread::sleep, time::Duration};
+use std::{collections::VecDeque, fs, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 
@@ -15,7 +18,9 @@ use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
 use indexmap::{map::MutableKeys, IndexMap};
 
-use crate::{DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime, ScriptLinePrompts};
+use crate::{
+    DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime, ScriptLinePrompts,
+};
 
 /// This struct stores the UI's state, and is initalized from a save file.
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
@@ -114,7 +119,7 @@ impl Default for UiState
             documentation_window: false,
             demos: Arc::new(DashMap::new()),
             demo_buffer: DemoBuffer::new(vec![]),
-            scripts: Arc::new(Mutex::new(IndexMap::new()))
+            scripts: Arc::new(Mutex::new(IndexMap::new())),
         }
     }
 }
@@ -321,7 +326,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         //Run lua script
                                         match self.lua_runtime.load(script.clone()).exec() {
                                             Ok(_output) => {
-                                                let demo_steps: Vec<DemoStep> = self.demo_buffer.resource.write().drain(..).collect();
+                                                let demo_steps: Vec<DemoStep> = self.demo_buffer.buffer.write().drain(..).collect();
 
                                                 let demo_instance = DemoInstance { demo_steps, script_identifier: sha256::digest(script.clone())};
                                                 
@@ -371,7 +376,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                         if ui.button("Restore").clicked() {
                                             // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
-                                            self.scripts.lock().insert(name.clone(), script.clone());
+                                            self.scripts
+                                                .lock()
+                                                .insert(name.clone(), script.clone());
 
                                             // Flag it to be deleted finally from this hashmap.
                                             should_be_retained = false;
@@ -414,17 +421,17 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     });
             },
             ManagerPane::DemoManager => {
+                ui.allocate_space(vec2(ui.available_width(), 2.));
+
+                ui.button("Import Demo").clicked();
+
+                ui.separator();
+
                 ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for entry in self.demos.clone().iter() {
                             let demo_name = entry.key();
-
-                            if ui.button("Import Demo from File").clicked() {
-
-                            }
-
-                            ui.separator();
 
                             ui.horizontal(|ui| {
                                 if let Some(script) = self.scripts.lock().get(demo_name) {
@@ -438,17 +445,46 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                 ui.label(demo_name);
                                 ui.add_enabled_ui(self.demo_buffer.get_state() == DemoBufferState::None, |ui| {
                                     if ui.button("Playback").clicked() {
-                                        //Set buffer state
-                                        self.demo_buffer.set_state(DemoBufferState::Playback);
-    
-                                        //Set the buffer
-                                        self.demo_buffer.set_buffer(entry.demo_steps.clone());
+                                        //Clear environment
+                                        self.drawers.clear();
+
+                                        // Check if the demo is empty
+                                        if let Some(first_step) = entry.demo_steps.first() {
+                                            
+                                            // Check if the first step is a valid function
+                                            // If it returns an error the demo wont even start
+                                            match first_step.execute_lua_function(self.lua_runtime.clone()) {
+                                                Ok(_) => {
+                                                    //Set buffer state
+                                                    self.demo_buffer.set_state(DemoBufferState::Playback);
+                
+                                                    //Set the buffer
+                                                    self.demo_buffer.set_buffer(entry.demo_steps.clone());
+                                                },
+                                                Err(err) => {
+                                                    self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Demo runtime error: {err}")));
+                                                },
+                                            };
+                                        }
+                                        else {
+                                            // Reset state
+                                            self.demo_buffer.set_state(DemoBufferState::None);
+                                        }
                                     };
                                 });
                                 
                                 ui.menu_button("Settings", |ui| {
                                     if ui.button("Export as File").clicked() {
-                                        
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Demo File", &["demo"])
+                                            .save_file() {
+                                                let compressed_data = miniz_oxide::deflate::compress_to_vec(
+                                                    &rmp_serde::to_vec(entry.value()).unwrap(),
+                                                    CompressionLevel::BestCompression as u8,
+                                                );
+                                                
+                                                let _ = fs::write(path, compressed_data);
+                                            }
                                     }
                                     
                                     ui.separator();
@@ -575,8 +611,10 @@ pub fn main_ui(
             });
         });
 
+    let mut entity_manager_width = 0.;
+
     if ui_state.manager_panel {
-        bevy_egui::egui::SidePanel::right("right_panel")
+        let entity_manager = bevy_egui::egui::SidePanel::right("right_panel")
             .resizable(true)
             .min_width(240.)
             .show(ctx, |ui| {
@@ -603,10 +641,14 @@ pub fn main_ui(
                     ui,
                 );
             });
+
+        entity_manager_width = entity_manager.response.rect.width();
     }
 
+    let mut command_panel_height = 0.;
+
     if ui_state.command_panel {
-        bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
+        let command_panel = bevy_egui::egui::TopBottomPanel::bottom("bottom_panel")
             .default_height(100.)
             .min_height(150.)
             .resizable(true)
@@ -675,14 +717,24 @@ pub fn main_ui(
                                 ui.fonts(|f| f.layout_job(layout_job))
                             };
 
-                            // Create text editor
+                            //Only show the text editor as enabled if there isnt a demo going on
+                            let is_buffer_state_none = ui_state.demo_buffer.get_state() == DemoBufferState::None;
+                            ui.add_enabled_ui(is_buffer_state_none, |ui| {
+                                // Create text editor
                             let text_edit = ui.add(
                                 egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
                                     .frame(false)
                                     .code_editor()
                                     .layouter(&mut layouter)
                                     .desired_width(ui.available_size_before_wrap().x)
-                                    .hint_text(RichText::from("lua command").italics()),
+                                    .hint_text(RichText::from({
+                                        if is_buffer_state_none {
+                                            "Enter a command..."
+                                        }
+                                        else {
+                                            "Command line is disabled while replaying a Demo."
+                                        }
+                                    }).italics()),
                             );
 
                             // If the underlying text was changed reset the command line input index to 0.
@@ -769,9 +821,109 @@ pub fn main_ui(
                                     }
                                 }
                             }
+                            });
                         });
                     });
                 });
             });
+
+        command_panel_height = command_panel.response.rect.height();
+    }
+
+    let mut is_playbacker_open = true;
+
+    if let Some(buffer) = ui_state
+        .demo_buffer
+        .clone()
+        .get_state_if_eq(DemoBufferState::Playback)
+    {
+        Window::new("Playback Manager")
+            .fixed_pos(Pos2::new(
+                (ctx.screen_rect().width() - (entity_manager_width + 225.)) / 2.,
+                ctx.used_rect().height() - (command_panel_height + 140.),
+            ))
+            .open(&mut is_playbacker_open)
+            .fixed_size(vec2(300., 50.))
+            .show(ctx, |ui| {
+                ui.allocate_ui(vec2(200., 70.), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.centered_and_justified(|ui| {
+                            //Lock playback buffer and pray we dont deadlock
+                            let locked_buffer = buffer.read();
+
+                            ui.add_enabled_ui(ui_state.demo_buffer.iter_idx != 0, |ui| {
+                                if ui.button("◀").clicked() {
+                                    drawers.clear();
+
+                                    let desired_idx = ui_state.demo_buffer.iter_idx - 1;
+
+                                    if desired_idx == 0 {
+                                        // This cannot panic as we would have paniced already
+                                        locked_buffer
+                                            .first()
+                                            .unwrap()
+                                            .execute_lua_function(lua_runtime.clone())
+                                            .unwrap();
+                                    }
+
+                                    for idx in 0..desired_idx {
+                                        let step = locked_buffer[idx]
+                                            .execute_lua_function(lua_runtime.clone());
+
+                                        match step {
+                                            Ok(_) => (),
+                                            Err(err) => {
+                                                ui_state.toasts.lock().add(
+                                                    Toast::new()
+                                                        .kind(egui_toast::ToastKind::Error)
+                                                        .text(format!("Demo runtime error: {err}")),
+                                                );
+
+                                                return;
+                                            },
+                                        }
+                                    }
+
+                                    // If the action was successful decrement the internal index
+                                    ui_state.demo_buffer.iter_idx -= 1;
+                                }
+                            });
+
+                            ui.vertical(|ui| {
+                                ui.label(format!("Current step ({}/{}):", ui_state.demo_buffer.iter_idx, locked_buffer.len()));
+                                ui.label(locked_buffer[ui_state.demo_buffer.iter_idx].to_string());
+                            });
+
+                            if ui.button("▶").clicked() {
+                                let next_step = locked_buffer[ui_state.demo_buffer.iter_idx + 1]
+                                    .clone()
+                                    .execute_lua_function(lua_runtime.clone());
+
+                                match next_step {
+                                    Ok(_) => {
+                                        // If the action was successful increment the internal index
+                                        ui_state.demo_buffer.iter_idx += 1;
+                                    },
+                                    Err(err) => {
+                                        ui_state.toasts.lock().add(
+                                            Toast::new()
+                                                .kind(egui_toast::ToastKind::Error)
+                                                .text(format!("Demo runtime error: {err}")),
+                                        );
+                                    },
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+    }
+
+    // If the playbacker menu was closed
+    if !is_playbacker_open {
+        drawers.clear();
+
+        //Reset the demo buffer thus existing the demo mode
+        ui_state.demo_buffer.clear();
     }
 }
