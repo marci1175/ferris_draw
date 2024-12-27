@@ -18,7 +18,7 @@
   - Syntax highlighting is available in the Script Manager and the Command Panel.
 - The Command Panel has the user friendly interface with features to enhance production.
 - You can also save and open projects.
-
+- You can record demos and play them back step by step, so they can be explained thoroughly.
 ### Drawing Capabilities
 - Create multiple drawers (with a unique ID).
 - Draw lines forward and backward.
