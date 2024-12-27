@@ -1,3 +1,6 @@
+pub const DEMO_FILE_EXTENSION: &str = "demo";
+pub const PROJECT_FILE_EXTENSION: &str = "save";
+
 use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
@@ -15,13 +18,16 @@ use bevy::{
     render::mesh::PrimitiveTopology,
     text::cosmic_text::Angle,
 };
+
 pub mod ui;
+use chrono::{DateTime, Local};
 use dashmap::DashMap;
 use egui_toast::{Toast, Toasts};
 use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
 use mlua::{Error, Lua};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+use typed_floats::NonNaN;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DemoBuffer<T>
@@ -55,7 +61,8 @@ impl<T: Default> DemoBuffer<T>
         }
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self)
+    {
         *self.buffer.write() = T::default();
         self.set_state(DemoBufferState::None);
         self.iter_idx = 0;
@@ -88,59 +95,51 @@ impl<T: Default> DemoBuffer<T>
 
 /// The DemoInstance is used to store demos of scripts.
 /// These contain a script identifier, so that we can notify the user if their code has changed since the last demo recording.
-#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug, Eq, Hash)]
+#[serde(default)]
 pub struct DemoInstance
 {
+    pub name: String,
     pub demo_steps: Vec<DemoStep>,
     pub script_identifier: String,
+    pub created_at: DateTime<Local>,
+}
+
+impl PartialEq for DemoInstance
+{
+    fn eq(&self, other: &Self) -> bool
+    {
+        sha256::digest(rmp_serde::to_vec(self).unwrap())
+            == sha256::digest(rmp_serde::to_vec(other).unwrap())
+    }
 }
 
 /// The items of this enum contain the functions a user can call on their turtles.
 /// When recording a demo these are stored and can later be playbacked.
 /// All of the arguments to the functions are contained in the enum variants.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DemoStep
 {
     New(String),
     Center(String),
-    Forward(String, f32),
-    Rotate(String, f32),
-    Color(String, f32, f32, f32, f32),
+    Forward(String, NonNaN<f32>),
+    Rotate(String, NonNaN<f32>),
+    Color(String, NonNaN<f32>, NonNaN<f32>, NonNaN<f32>, NonNaN<f32>),
     Wipe,
     Remove(String),
     Disable(String),
     Enable(String),
     Fill(String),
-    Rectangle(String, f32, f32),
+    Rectangle(String, NonNaN<f32>, NonNaN<f32>),
+    Print(String),
+    Loop(usize, Vec<DemoStep>),
 }
 
 impl DemoStep
 {
     pub fn execute_lua_function(&self, lua_rt: LuaRuntime) -> Result<(), Error>
     {
-        match self {
-            DemoStep::New(id) => lua_rt.load(format!(r#"new("{id}")"#)).exec(),
-            DemoStep::Center(id) => lua_rt.load(format!(r#"center("{id}")"#)).exec(),
-            DemoStep::Forward(id, amnt) => {
-                lua_rt.load(format!(r#"forward("{id}", {amnt})"#)).exec()
-            },
-            DemoStep::Rotate(id, amnt) => lua_rt.load(format!(r#"rotate("{id}", {amnt})"#)).exec(),
-            DemoStep::Color(id, r, g, b, a) => {
-                lua_rt
-                    .load(format!(r#"new("{id}", {r}, {g}, {b}, {a})"#))
-                    .exec()
-            },
-            DemoStep::Wipe => lua_rt.load(r#"wipe()"#.to_string()).exec(),
-            DemoStep::Remove(id) => lua_rt.load(format!(r#"remove("{id}")"#)).exec(),
-            DemoStep::Disable(id) => lua_rt.load(format!(r#"disable("{id}")"#)).exec(),
-            DemoStep::Enable(id) => lua_rt.load(format!(r#"enable("{id}")"#)).exec(),
-            DemoStep::Fill(id) => lua_rt.load(format!(r#"fill("{id}")"#)).exec(),
-            DemoStep::Rectangle(id, desired_x, desired_y) => {
-                lua_rt
-                    .load(format!(r#"rectangle("{id}", {desired_x}, {desired_y})"#))
-                    .exec()
-            },
-        }
+        lua_rt.load(self.to_string()).exec()
     }
 }
 
@@ -179,6 +178,17 @@ impl Display for DemoStep
             },
             DemoStep::Rectangle(id, desired_x, desired_y) => {
                 format!(r#"rectangle("{id}", {desired_x}, {desired_y})"#)
+            },
+            DemoStep::Print(string) => {
+                format!(r#"print("{string}")"#)
+            },
+            DemoStep::Loop(count, vec) => {
+                format!("for i=1,{count} do {} end", {
+                    vec.iter()
+                        .map(|step| step.to_string())
+                        .collect::<Vec<String>>()
+                        .join("\n")
+                })
             },
         })
     }
@@ -345,7 +355,7 @@ pub fn color_into_vec4(color: Color) -> Vec4
 }
 
 /// The information of the Drawer
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Clone)]
 pub struct Drawer
 {
     /// Whether the Drawer should draw.
@@ -441,9 +451,16 @@ pub fn init_lua_functions(
 )
 {
     let lua_vm = lua_rt.clone();
+    let demo_buffer_handle = demo_buffer.clone();
 
     let print = lua_vm
         .create_function(move |_, msg: String| {
+            if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                buffer.write().push(DemoStep::Print(msg));
+
+                return Ok(());
+            }
+
             output_list.write().push(ScriptLinePrompts::Standard(msg));
 
             Ok(())
@@ -465,7 +482,7 @@ pub fn init_lua_functions(
             }
             else {
                 return Err(mlua::Error::RuntimeError(format!(
-                    "The drawer with handle {id} already exists."
+                    r#"The drawer with handle "{id}" already exists."#
                 )));
             }
 
@@ -490,7 +507,10 @@ pub fn init_lua_functions(
                     if let Some(buffer) =
                         demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
                     {
-                        buffer.write().push(DemoStep::Rotate(id, degrees));
+                        buffer.write().push(DemoStep::Rotate(
+                            id,
+                            NonNaN::<f32>::new(degrees).unwrap_or_default(),
+                        ));
 
                         return Ok(());
                     }
@@ -501,7 +521,7 @@ pub fn init_lua_functions(
                 None => {
                     // Return the error
                     return Err(mlua::Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -544,7 +564,7 @@ pub fn init_lua_functions(
                 },
                 None => {
                     return Err(mlua::Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -570,9 +590,13 @@ pub fn init_lua_functions(
                     if let Some(buffer) =
                         demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
                     {
-                        buffer
-                            .write()
-                            .push(DemoStep::Color(id, red, green, blue, alpha));
+                        buffer.write().push(DemoStep::Color(
+                            id,
+                            NonNaN::<f32>::new(red).unwrap_or_default(),
+                            NonNaN::<f32>::new(green).unwrap_or_default(),
+                            NonNaN::<f32>::new(blue).unwrap_or_default(),
+                            NonNaN::<f32>::new(alpha).unwrap_or_default(),
+                        ));
 
                         return Ok(());
                     }
@@ -583,7 +607,7 @@ pub fn init_lua_functions(
                 None => {
                     // Return the error
                     return Err(mlua::Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -609,7 +633,10 @@ pub fn init_lua_functions(
                     if let Some(buffer) =
                         demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
                     {
-                        buffer.write().push(DemoStep::Forward(id, amount));
+                        buffer.write().push(DemoStep::Forward(
+                            id,
+                            NonNaN::<f32>::new(amount).unwrap_or_default(),
+                        ));
 
                         return Ok(());
                     }
@@ -651,7 +678,7 @@ pub fn init_lua_functions(
                 None => {
                     //Reset the drawer's position
                     return Err(mlua::Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -698,7 +725,7 @@ pub fn init_lua_functions(
         .create_function(move |_, id: String| {
             if drawers_clone.remove(&id).is_none() {
                 return Err(Error::RuntimeError(format!(
-                    "The drawer with handle {id} doesn't exist."
+                    r#"The drawer with handle "{id}" doesn't exist."#
                 )));
             }
 
@@ -749,7 +776,7 @@ pub fn init_lua_functions(
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -776,7 +803,7 @@ pub fn init_lua_functions(
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -795,7 +822,7 @@ pub fn init_lua_functions(
                 Some(selected_drawer) => {
                     if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
                         buffer.write().push(DemoStep::Fill(id));
-    
+
                         return Ok(());
                     }
 
@@ -803,7 +830,7 @@ pub fn init_lua_functions(
                         .iter()
                         .flat_map(|pair| {
                             let drawer = pair.value();
-                            
+
                             drawer.drawings.clone().lines.iter().flat_map(|line_strip| {
                                 line_strip.points.iter().map(|points| points.0).collect::<Vec<Vec3>>()
                             }).collect::<Vec<Vec3>>()
@@ -819,7 +846,7 @@ pub fn init_lua_functions(
                     }
 
                     let mut checked_lines: Vec<Line> = vec![];
-                        
+
                     for (idx, line) in lines.iter().enumerate() {
                         for (current_checked_idx, checked_line) in checked_lines.iter().enumerate() {
                             if idx as isize - 1 != current_checked_idx as isize && checked_lines.len() > 2 {
@@ -844,14 +871,14 @@ pub fn init_lua_functions(
                                     break;
                                 }
                             }
-                        }                        
+                        }
 
-                        checked_lines.push(line.clone());                        
+                        checked_lines.push(line.clone());
                     }
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }
@@ -896,7 +923,7 @@ pub fn init_lua_functions(
                 Some(drawer) => Ok((drawer.pos.x, drawer.pos.y)),
                 None => {
                     Err(Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )))
                 },
             }
@@ -915,9 +942,11 @@ pub fn init_lua_functions(
                     if let Some(buffer) =
                         demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
                     {
-                        buffer
-                            .write()
-                            .push(DemoStep::Rectangle(id, desired_x, desired_y));
+                        buffer.write().push(DemoStep::Rectangle(
+                            id,
+                            NonNaN::<f32>::new(desired_x).unwrap_or_default(),
+                            NonNaN::<f32>::new(desired_y).unwrap_or_default(),
+                        ));
 
                         return Ok(());
                     }
@@ -949,7 +978,7 @@ pub fn init_lua_functions(
                 },
                 None => {
                     return Err(Error::RuntimeError(format!(
-                        "The drawer with handle {id} doesn't exist."
+                        r#"The drawer with handle "{id}" doesn't exist."#
                     )));
                 },
             }

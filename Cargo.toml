@@ -25,3 +25,5 @@ geo = "0.29.3"
 egui_commonmark = {version = "0.18.0", features = ["better_syntax_highlighting", "macros"]}
 image = { version = "0.25", default-features = false, features = ["png"] }
 sha256 = "1.5.0"
+chrono = { version = "0.4.39", features = ["serde"] }
+typed_floats = {version = "1.0.2", features = ["serde"]}

@@ -1,25 +1,25 @@
 use bevy::prelude::{Res, ResMut};
 use bevy_egui::{
-    egui::{
-        self, vec2, Color32, ImageButton, Key, Layout, Pos2, Rect, RichText, ScrollArea, Stroke,
-        TextEdit, UiBuilder, Window,
-    },
+    egui::{self, vec2, Color32, Key, Pos2, RichText, ScrollArea, TextEdit, UiBuilder, Window},
     EguiContexts,
 };
-use dashmap::DashMap;
+use chrono::Local;
+use dashmap::DashSet;
 use egui_commonmark::{commonmark_str, CommonMarkCache};
-use miniz_oxide::deflate::CompressionLevel;
-use std::{collections::VecDeque, fs, sync::Arc};
+use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
+use serde::Deserialize;
+use std::{collections::VecDeque, fs, path::PathBuf, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 
 use bevy::prelude::Resource;
 use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
-use indexmap::{map::MutableKeys, IndexMap};
+use indexmap::{set::MutableValues, IndexSet};
 
 use crate::{
     DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime, ScriptLinePrompts,
+    DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
 };
 
 /// This struct stores the UI's state, and is initalized from a save file.
@@ -50,6 +50,7 @@ pub struct UiState
     pub command_line_buffer: String,
 
     /// The manager panel's tab state.
+    #[serde(skip)]
     pub item_manager: egui_tiles::Tree<ManagerPane>,
 
     /// The command line outputs / inputs.
@@ -67,7 +68,7 @@ pub struct UiState
 
     /// This DashMap contains the deleted scripts.
     /// Scripts deleted from there pernament.
-    pub rubbish_bin: Arc<DashMap<String, String>>,
+    pub rubbish_bin: Arc<DashSet<RubbishBinItem>>,
 
     /// The CommonMarkCache is a cache which stores data about the documentation displayer widget.
     /// We need this to be able to display the documentation.
@@ -78,7 +79,7 @@ pub struct UiState
 
     /// This field is used to store demos, which can be playbacked later.
     /// One script can only have one demo.
-    pub demos: Arc<DashMap<String, DemoInstance>>,
+    pub demos: Arc<DashSet<DemoInstance>>,
 
     /// This demo buffer is used when recording a demo for a script.
     /// If the demo is accessible a recording can't be started as it is only available when there is an ongoing recording.
@@ -87,7 +88,7 @@ pub struct UiState
     #[serde(skip)]
     pub demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
-    pub scripts: Arc<Mutex<IndexMap<String, String>>>,
+    pub scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
 }
 
 impl Default for UiState
@@ -103,6 +104,7 @@ impl Default for UiState
                     tiles.insert_pane(ManagerPane::EntityManager),
                     tiles.insert_pane(ManagerPane::ScriptManager),
                     tiles.insert_pane(ManagerPane::DemoManager),
+                    tiles.insert_pane(ManagerPane::RubbishBin),
                 ];
 
                 egui_tiles::Tree::new("manager_tree", tiles.insert_tab_tile(tileids), tiles)
@@ -114,12 +116,12 @@ impl Default for UiState
             command_line_buffer: String::new(),
             command_line_inputs: VecDeque::new(),
             command_line_input_index: 0,
-            rubbish_bin: Arc::new(DashMap::new()),
+            rubbish_bin: Arc::new(DashSet::new()),
             common_mark_cache: CommonMarkCache::default(),
             documentation_window: false,
-            demos: Arc::new(DashMap::new()),
+            demos: Arc::new(DashSet::new()),
             demo_buffer: DemoBuffer::new(vec![]),
-            scripts: Arc::new(Mutex::new(IndexMap::new())),
+            scripts: Arc::new(Mutex::new(IndexSet::new())),
         }
     }
 }
@@ -133,8 +135,18 @@ pub enum ManagerPane
     /// The entity manager tab.
     #[default]
     EntityManager,
-
+    /// Demo manager tab.
     DemoManager,
+    /// Rubbish bin tab.
+    RubbishBin,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum RubbishBinItem
+{
+    Script(ScriptInstance),
+    Demo(DemoInstance),
+    // Drawer(crate::Drawer),
 }
 
 /// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
@@ -157,13 +169,28 @@ pub struct ManagerBehavior
 
     /// This DashMap contains the deleted scripts.
     /// Scripts deleted from there pernament.
-    rubbish_bin: Arc<DashMap<String, String>>,
+    rubbish_bin: Arc<DashSet<RubbishBinItem>>,
 
-    demos: Arc<DashMap<String, DemoInstance>>,
+    demos: Arc<DashSet<DemoInstance>>,
 
     demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
-    scripts: Arc<Mutex<IndexMap<String, String>>>,
+    scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, Hash)]
+pub struct ScriptInstance
+{
+    name: String,
+    script: String,
+}
+
+impl ScriptInstance
+{
+    pub fn new(name: String, script: String) -> Self
+    {
+        Self { name, script }
+    }
 }
 
 impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
@@ -181,19 +208,21 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                 ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
                     let name_buffer = &mut *self.name_buffer.lock();
-                    
+
                     ui.menu_button("Add Script", |ui| {
                         ui.allocate_ui(vec2(ui.available_width(), 70.), |ui| {
                             ui.horizontal_centered(|ui| {
                                     ui.add_enabled_ui(!name_buffer.is_empty(), |ui| {
                                     let add_button = ui.button("Add");
-    
+
                                     if add_button.clicked() {
                                         let mut script_handle = self.scripts.lock();
 
-                                        if !script_handle.contains_key(&*name_buffer) && !self.rubbish_bin.contains_key(&*name_buffer) {
-                                            script_handle.insert(name_buffer.clone(), String::from(""));
+                                        if !script_handle.iter().any(|script| script.name == *name_buffer) {
+                                            script_handle.insert(ScriptInstance { name: name_buffer.clone(), script: String::new() });
+
                                             name_buffer.clear();
+
                                             ui.close_menu();
                                         }
                                         else {
@@ -212,7 +241,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
                                 match fs::read_to_string(&path) {
                                     Ok(file_content) => {
-                                        self.scripts.lock().insert(path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(), file_content);
+                                        self.scripts.lock().insert(ScriptInstance::new(path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(), file_content));
                                     },
                                     Err(_err) => {
                                         self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Reading from file ({}) failed: {_err}", path.display())));
@@ -228,169 +257,167 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                 ui.separator();
 
-                let scripts_clone = self.scripts.clone();
+                ScrollArea::both()
+                    .max_height(ui.available_height() - 200.)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.scripts.lock().retain2(|script_instance| {
+                            let mut should_keep = true;
 
-                ScrollArea::both().max_height(ui.available_height() - 200.).auto_shrink([false, false]).show(ui, |ui| {
-                    self.scripts.lock().retain2(|name, script| {
-                        let mut should_keep = true;
-                        ui.horizontal(|ui| {
-                            ui.label(name.clone());
+                            ui.horizontal(|ui| {
+                                ui.label(script_instance.name.clone());
 
-                            ui.add_enabled_ui(self.demo_buffer.get_state() == DemoBufferState::None, |ui| {
-                                if ui.button("Run").clicked() {
-                                    if let Err(err) = self.lua_runtime.load(script.to_string()).exec() {
-                                        self.toasts.lock().add(
-                                            Toast::new()
-                                                .kind(egui_toast::ToastKind::Error)
-                                                .text(err.to_string()),
-                                        );
-                                    };
-                                }
-                            });
+                                ui.add_enabled_ui(
+                                    self.demo_buffer.get_state() == DemoBufferState::None,
+                                    |ui| {
+                                        if ui.button("Run").clicked() {
+                                            if let Err(err) = self
+                                                .lua_runtime
+                                                .load(script_instance.script.to_string())
+                                                .exec()
+                                            {
+                                                self.toasts.lock().add(
+                                                    Toast::new()
+                                                        .kind(egui_toast::ToastKind::Error)
+                                                        .text(err.to_string()),
+                                                );
+                                            };
+                                        }
+                                    },
+                                );
 
-                            ui.push_id(name.clone(), |ui| {
-                                ui.collapsing("Settings", |ui| {
-                                    ui.menu_button("Edit", |ui| {
-                                    let theme =
+                                ui.push_id(script_instance.name.clone(), |ui| {
+                                    ui.collapsing("Settings", |ui| {
+                                        ui.menu_button("Edit", |ui| {
+                                            let theme =
                                         egui_extras::syntax_highlighting::CodeTheme::from_memory(
                                             ui.ctx(),
                                             ui.style(),
                                         );
 
-                                    let mut layouter =
-                                        |ui: &egui::Ui, string: &str, wrap_width: f32| {
-                                            let mut layout_job =
-                                                egui_extras::syntax_highlighting::highlight(
-                                                    ui.ctx(),
-                                                    ui.style(),
-                                                    &theme,
-                                                    string,
-                                                    "lua",
-                                                );
-                                            layout_job.wrap.max_width = wrap_width;
-                                            ui.fonts(|f| f.layout_job(layout_job))
-                                        };
+                                            let mut layouter =
+                                                |ui: &egui::Ui, string: &str, wrap_width: f32| {
+                                                    let mut layout_job =
+                                                        egui_extras::syntax_highlighting::highlight(
+                                                            ui.ctx(),
+                                                            ui.style(),
+                                                            &theme,
+                                                            string,
+                                                            "lua",
+                                                        );
+                                                    layout_job.wrap.max_width = wrap_width;
+                                                    ui.fonts(|f| f.layout_job(layout_job))
+                                                };
 
-                                        ScrollArea::both().show(ui, |ui| {
-                                            ui.add(
-                                                TextEdit::multiline(script)
+                                            ScrollArea::both().show(ui, |ui| {
+                                                ui.add(
+                                                    TextEdit::multiline(
+                                                        &mut script_instance.script,
+                                                    )
                                                     .code_editor()
                                                     .layouter(&mut layouter),
-                                            );
-                                        });
-                                    });
-                                    if ui.button("Delete").clicked() {
-                                        // Flag the script as to be deleted
-                                        should_keep = false;
-
-                                        //Insert the script into the rubbish bin
-                                        self.rubbish_bin.insert(name.clone(), script.clone());
-                                    }
-                                    let menu_button = ui.menu_button("Rename script", |ui| {
-                                        ui.text_edit_singleline(&mut *self.rename_buffer.lock());
-                                        if ui.button("Rename").clicked() {
-                                            let name_buffer = &*self.rename_buffer.lock();
-                                            if !scripts_clone.lock().contains_key(name_buffer) {
-                                                *name = name_buffer.clone();
-                                            }
-                                            else {
-                                                self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Script with name {name_buffer} already exists.")));
-                                            }
-                                        }
-                                    });
-
-                                    if menu_button.response.clicked() {
-                                        *self.rename_buffer.lock() = name.clone();
-                                    }
-                                
-                                    if ui.button("Export as File").clicked() {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .set_file_name(name.clone())
-                                            .add_filter("Lua", &["lua"])
-                                            .save_file() {
-                                                fs::write(path, script.clone()).unwrap();
-                                            }
-                                    }
-                                
-                                    ui.separator();
-
-                                    if ui.button("Create Demo").clicked() {
-                                        //Store current drawers and canvas
-                                        let current_drawer_canvas = self.drawers.clone();
-
-                                        self.drawers.clear();
-
-                                        //Set Demo buffer state
-                                        self.demo_buffer.set_state(DemoBufferState::Record);
-
-                                        //Run lua script
-                                        match self.lua_runtime.load(script.clone()).exec() {
-                                            Ok(_output) => {
-                                                let demo_steps: Vec<DemoStep> = self.demo_buffer.buffer.write().drain(..).collect();
-
-                                                let demo_instance = DemoInstance { demo_steps, script_identifier: sha256::digest(script.clone())};
-                                                
-                                                self.demos.insert(name.clone(), demo_instance);
-                                            },
-                                            Err(err) => {
-                                                self.toasts.lock().add(
-                                                    Toast::new()
-                                                        .kind(egui_toast::ToastKind::Error)
-                                                        .text(format!("Failed to create Demo: {err}")),
                                                 );
-                                            },
+                                            });
+                                        });
+                                        if ui.button("Delete").clicked() {
+                                            // Flag the script as to be deleted
+                                            should_keep = false;
+
+                                            //Insert the script into the rubbish bin
+                                            self.rubbish_bin.insert(RubbishBinItem::Script(
+                                                script_instance.clone(),
+                                            ));
                                         }
 
-                                        //Reset Demo buffer state
-                                        self.demo_buffer.set_state(DemoBufferState::None);
+                                        let rename_menu = ui.menu_button("Rename script", |ui| {
+                                            ui.text_edit_singleline(
+                                                &mut *self.rename_buffer.lock(),
+                                            );
+                                            if ui.button("Rename").clicked() {
+                                                let name_buffer = &*self.rename_buffer.lock();
 
-                                        //Load back the state
-                                        self.drawers = current_drawer_canvas;
-                                    }
-                                });
-                            });
-                        });
+                                                script_instance.name = name_buffer.clone();
+                                            }
+                                        });
 
-                        should_keep
-                    });
-                });
+                                        if rename_menu.response.clicked() {
+                                            *self.rename_buffer.lock() =
+                                                script_instance.name.clone();
+                                        }
 
-                ui.collapsing(
-                    format!("Deleted Scripts: {}", self.rubbish_bin.len()),
-                    |ui| {
-                        ScrollArea::both()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                self.rubbish_bin.retain(|name, script| {
-                                    let mut should_be_retained = true;
+                                        if ui.button("Export as File").clicked() {
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .set_file_name(script_instance.name.clone())
+                                                .add_filter("Lua", &["lua"])
+                                                .save_file()
+                                            {
+                                                fs::write(path, script_instance.script.clone())
+                                                    .unwrap();
+                                            }
+                                        }
 
-                                    ui.horizontal(|ui| {
-                                        ui.label(name);
-                                        if ui
-                                            .button(RichText::from("Delete").color(Color32::RED))
-                                            .clicked()
-                                        {
-                                            // Flag it to be deleted finally.
-                                            should_be_retained = false;
-                                        };
+                                        ui.separator();
 
-                                        if ui.button("Restore").clicked() {
-                                            // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
-                                            self.scripts
-                                                .lock()
-                                                .insert(name.clone(), script.clone());
+                                        if ui.button("Create Demo").clicked() {
+                                            //Store current drawers and canvas
+                                            let current_drawer_canvas = self.drawers.clone();
 
-                                            // Flag it to be deleted finally from this hashmap.
-                                            should_be_retained = false;
-                                        };
+                                            self.drawers.clear();
+
+                                            //Set Demo buffer state
+                                            self.demo_buffer.set_state(DemoBufferState::Record);
+
+                                            //Run lua script
+                                            match self
+                                                .lua_runtime
+                                                .load(script_instance.script.clone())
+                                                .exec()
+                                            {
+                                                Ok(_output) => {
+                                                    let demo_steps: Vec<DemoStep> = self
+                                                        .demo_buffer
+                                                        .buffer
+                                                        .write()
+                                                        .drain(..)
+                                                        .collect();
+
+                                                    let current_date_time = Local::now();
+
+                                                    let demo_instance = DemoInstance {
+                                                        demo_steps,
+                                                        script_identifier: sha256::digest(
+                                                            script_instance.script.clone(),
+                                                        ),
+                                                        name: script_instance.name.clone(),
+                                                        created_at: current_date_time,
+                                                    };
+
+                                                    self.demos.insert(demo_instance);
+                                                },
+                                                Err(err) => {
+                                                    self.toasts.lock().add(
+                                                        Toast::new()
+                                                            .kind(egui_toast::ToastKind::Error)
+                                                            .text(format!(
+                                                                "Failed to create Demo: {err}"
+                                                            )),
+                                                    );
+                                                },
+                                            }
+
+                                            //Reset Demo buffer state
+                                            self.demo_buffer.set_state(DemoBufferState::None);
+
+                                            //Load back the state
+                                            self.drawers = current_drawer_canvas;
+                                        }
                                     });
-
-                                    // Return the final value.
-                                    should_be_retained
                                 });
                             });
-                    },
-                );
+
+                            should_keep
+                        });
+                    });
             },
             ManagerPane::EntityManager => {
                 ScrollArea::both()
@@ -423,86 +450,218 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
             ManagerPane::DemoManager => {
                 ui.allocate_space(vec2(ui.available_width(), 2.));
 
-                ui.button("Import Demo").clicked();
+                ui.menu_button("Import Demo", |ui| {
+                    if ui.button("Import Demo from File").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
+                            .pick_file()
+                        {
+                            match read_compressed_file_into::<DemoInstance>(path) {
+                                Ok(save_file) => {
+                                    self.demos.insert(save_file);
+                                },
+                                Err(err) => {
+                                    self.toasts.lock().add(
+                                        Toast::new()
+                                            .kind(egui_toast::ToastKind::Error)
+                                            .text(format!("Demo runtime error: {err}")),
+                                    );
+                                },
+                            };
+                        }
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Import from Clipboard").clicked() {}
+                });
 
                 ui.separator();
 
                 ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for entry in self.demos.clone().iter() {
-                            let demo_name = entry.key();
+                        let mut modifiable_demo: Option<DemoInstance> = None;
+
+                        self.demos.iter().position(|demo| {
+                            let mut should_keep = true;
+                            let demo_name = demo.name.clone();
 
                             ui.horizontal(|ui| {
-                                if let Some(script) = self.scripts.lock().get(demo_name) {
-                                    if sha256::digest(script) != entry.script_identifier {
-                                        ui.group(|ui| {
-                                            ui.label(RichText::from("!").color(Color32::RED)).on_hover_text("The script has been modified since the last demo recording.");
-                                        });
-                                    }
-                                }
-
                                 ui.label(demo_name);
-                                ui.add_enabled_ui(self.demo_buffer.get_state() == DemoBufferState::None, |ui| {
-                                    if ui.button("Playback").clicked() {
-                                        //Clear environment
-                                        self.drawers.clear();
+                                ui.add_enabled_ui(
+                                    self.demo_buffer.get_state() == DemoBufferState::None,
+                                    |ui| {
+                                        if ui.button("Playback").clicked() {
+                                            //Clear environment
+                                            self.drawers.clear();
 
-                                        // Check if the demo is empty
-                                        if let Some(first_step) = entry.demo_steps.first() {
-                                            
-                                            // Check if the first step is a valid function
-                                            // If it returns an error the demo wont even start
-                                            match first_step.execute_lua_function(self.lua_runtime.clone()) {
-                                                Ok(_) => {
-                                                    //Set buffer state
-                                                    self.demo_buffer.set_state(DemoBufferState::Playback);
-                
-                                                    //Set the buffer
-                                                    self.demo_buffer.set_buffer(entry.demo_steps.clone());
-                                                },
-                                                Err(err) => {
-                                                    self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Demo runtime error: {err}")));
-                                                },
-                                            };
-                                        }
-                                        else {
-                                            // Reset state
-                                            self.demo_buffer.set_state(DemoBufferState::None);
-                                        }
-                                    };
-                                });
-                                
+                                            // Check if the demo is empty
+                                            if let Some(first_step) = demo.demo_steps.first() {
+                                                // Check if the first step is a valid function
+                                                // If it returns an error the demo wont even start
+                                                match first_step
+                                                    .execute_lua_function(self.lua_runtime.clone())
+                                                {
+                                                    Ok(_) => {
+                                                        //Set buffer state
+                                                        self.demo_buffer
+                                                            .set_state(DemoBufferState::Playback);
+
+                                                        //Set the buffer
+                                                        self.demo_buffer
+                                                            .set_buffer(demo.demo_steps.clone());
+                                                    },
+                                                    Err(err) => {
+                                                        self.toasts.lock().add(
+                                                            Toast::new()
+                                                                .kind(egui_toast::ToastKind::Error)
+                                                                .text(format!(
+                                                                    "Demo runtime error: {err}"
+                                                                )),
+                                                        );
+                                                    },
+                                                };
+                                            }
+                                            else {
+                                                // Reset state
+                                                self.demo_buffer.set_state(DemoBufferState::None);
+                                            }
+                                        };
+                                    },
+                                );
+
                                 ui.menu_button("Settings", |ui| {
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Delete").clicked() {
+                                            should_keep = false;
+
+                                            //Insert the script into the rubbish bin
+                                            self.rubbish_bin
+                                                .insert(RubbishBinItem::Demo(demo.clone()));
+                                        }
+
+                                        let rename_menu = ui.menu_button("Rename script", |ui| {
+                                            ui.text_edit_singleline(
+                                                &mut *self.rename_buffer.lock(),
+                                            );
+
+                                            if ui.button("Rename").clicked() {
+                                                //Set the variable so that we will know which entry to modify and re-insert
+                                                modifiable_demo = Some(demo.clone());
+
+                                                //Flag the entry to be deleted
+                                                should_keep = false;
+                                            }
+                                        });
+
+                                        if rename_menu.response.clicked() {
+                                            *self.rename_buffer.lock() = demo.name.clone();
+                                        }
+                                    });
+
                                     if ui.button("Export as File").clicked() {
                                         if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Demo File", &["demo"])
-                                            .save_file() {
-                                                let compressed_data = miniz_oxide::deflate::compress_to_vec(
-                                                    &rmp_serde::to_vec(entry.value()).unwrap(),
+                                            .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
+                                            .save_file()
+                                        {
+                                            let compressed_data =
+                                                miniz_oxide::deflate::compress_to_vec(
+                                                    &rmp_serde::to_vec(&demo).unwrap(),
                                                     CompressionLevel::BestCompression as u8,
                                                 );
-                                                
-                                                let _ = fs::write(path, compressed_data);
-                                            }
+
+                                            let _ = fs::write(path, compressed_data);
+                                        }
                                     }
-                                    
+
                                     ui.separator();
 
                                     ui.menu_button("View raw Demo", |ui| {
                                         ui.label("Raw demo");
-                                        
+
                                         ui.separator();
 
-                                        ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                                            for command in &entry.demo_steps {
-                                                ui.label(command.to_string());
-                                            }
-                                        });
+                                        ScrollArea::both().auto_shrink([false, false]).show(
+                                            ui,
+                                            |ui| {
+                                                for command in &demo.demo_steps {
+                                                    ui.label(command.to_string());
+                                                }
+                                            },
+                                        );
                                     });
+
+                                    ui.label(format!("Created: {}", demo.created_at.to_rfc3339()));
                                 });
                             });
+
+                            should_keep
+                        });
+
+                        if let Some(mut demo) = modifiable_demo {
+                            let name_buffer = &*self.rename_buffer.lock();
+
+                            demo.name = name_buffer.clone();
+
+                            self.demos.insert(demo);
                         }
+                    });
+            },
+            ManagerPane::RubbishBin => {
+                ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.rubbish_bin.retain(|item| {
+                            let mut should_be_retained = true;
+                            match item {
+                                RubbishBinItem::Script(script_instance) => {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::from("Script").weak());
+                                        ui.label(script_instance.name.clone());
+                                        if ui.button("Restore").clicked() {
+                                            // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
+                                            self.scripts.lock().insert(script_instance.clone());
+
+                                            // Flag it to be deleted finally from this hashmap.
+                                            should_be_retained = false;
+                                        };
+
+                                        if ui
+                                            .button(RichText::from("Delete").color(Color32::RED))
+                                            .clicked()
+                                        {
+                                            // Flag it to be deleted finally.
+                                            should_be_retained = false;
+                                        };
+                                    });
+                                },
+                                RubbishBinItem::Demo(demo_instance) => {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::from("Demo").weak());
+                                        ui.label(demo_instance.name.clone());
+                                        if ui.button("Restore").clicked() {
+                                            // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
+                                            self.demos.insert(demo_instance.clone());
+
+                                            // Flag it to be deleted finally from this hashmap.
+                                            should_be_retained = false;
+                                        };
+
+                                        if ui
+                                            .button(RichText::from("Delete").color(Color32::RED))
+                                            .clicked()
+                                        {
+                                            // Flag it to be deleted finally.
+                                            should_be_retained = false;
+                                        };
+                                    });
+                                },
+                            }
+
+                            // Return the final value.
+                            should_be_retained
+                        });
                     });
             },
         }
@@ -516,6 +675,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
             ManagerPane::ScriptManager => format!("Scripts: {}", self.scripts.lock().len()),
             ManagerPane::EntityManager => format!("Entities: {}", self.drawers.len()),
             ManagerPane::DemoManager => format!("Demos: {}", self.demos.len()),
+            ManagerPane::RubbishBin => format!("Deleted: {}", self.rubbish_bin.len()),
         }
         .into()
     }
@@ -554,7 +714,7 @@ pub fn main_ui(
                     if ui.button("Save project").clicked() {
                         if let Some(save_path) = rfd::FileDialog::new()
                             .set_file_name("new_save")
-                            .add_filter("Save file", &["data"])
+                            .add_filter("Save file", &[PROJECT_FILE_EXTENSION])
                             .save_file()
                         {
                             let compressed_data = miniz_oxide::deflate::compress_to_vec(
@@ -574,7 +734,7 @@ pub fn main_ui(
 
                     if ui.button("Open project").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Open file", &["data"])
+                            .add_filter("Open file", &[PROJECT_FILE_EXTENSION])
                             .pick_file()
                         {
                             match fs::read(path) {
@@ -718,10 +878,11 @@ pub fn main_ui(
                             };
 
                             //Only show the text editor as enabled if there isnt a demo going on
-                            let is_buffer_state_none = ui_state.demo_buffer.get_state() == DemoBufferState::None;
+                            let is_buffer_state_none =
+                                ui_state.demo_buffer.get_state() == DemoBufferState::None;
                             ui.add_enabled_ui(is_buffer_state_none, |ui| {
                                 // Create text editor
-                            let text_edit = ui.add(
+                                let text_edit = ui.add(
                                 egui::TextEdit::singleline(&mut ui_state.command_line_buffer)
                                     .frame(false)
                                     .code_editor()
@@ -737,90 +898,97 @@ pub fn main_ui(
                                     }).italics()),
                             );
 
-                            // If the underlying text was changed reset the command line input index to 0.
-                            if text_edit.changed() {
-                                ui_state.command_line_input_index = 0;
-                            }
+                                // If the underlying text was changed reset the command line input index to 0.
+                                if text_edit.changed() {
+                                    ui_state.command_line_input_index = 0;
+                                }
 
-                            // Only take keyobard inputs, when the text editor has focus.
-                            if text_edit.has_focus() {
-                                if enter_was_pressed {
-                                    let command_line_buffer = ui_state.command_line_buffer.clone();
+                                // Only take keyobard inputs, when the text editor has focus.
+                                if text_edit.has_focus() {
+                                    if enter_was_pressed {
+                                        let command_line_buffer =
+                                            ui_state.command_line_buffer.clone();
 
-                                    if command_line_buffer == "cls"
-                                        || command_line_buffer == "clear"
-                                    {
-                                        ui_state.command_line_outputs.write().clear();
+                                        if command_line_buffer == "cls"
+                                            || command_line_buffer == "clear"
+                                        {
+                                            ui_state.command_line_outputs.write().clear();
+                                        }
+                                        else {
+                                            ui_state.command_line_outputs.write().push(
+                                                ScriptLinePrompts::UserInput(
+                                                    command_line_buffer.clone(),
+                                                ),
+                                            );
+                                            match lua_runtime
+                                                .load(command_line_buffer.clone())
+                                                .exec()
+                                            {
+                                                Ok(_output) => (),
+                                                Err(_err) => {
+                                                    ui_state.command_line_outputs.write().push(
+                                                        ScriptLinePrompts::Error(_err.to_string()),
+                                                    );
+                                                },
+                                            }
+                                        }
+
+                                        if !command_line_buffer.is_empty() {
+                                            //Store the command used
+                                            ui_state
+                                                .command_line_inputs
+                                                .push_front(command_line_buffer.clone());
+                                        }
+
+                                        // Clear out the buffer regardless of the command being used.
+                                        ui_state.command_line_buffer.clear();
                                     }
-                                    else {
-                                        ui_state.command_line_outputs.write().push(
-                                            ScriptLinePrompts::UserInput(
-                                                command_line_buffer.clone(),
-                                            ),
-                                        );
-                                        match lua_runtime.load(command_line_buffer.clone()).exec() {
-                                            Ok(_output) => (),
-                                            Err(_err) => {
-                                                ui_state.command_line_outputs.write().push(
-                                                    ScriptLinePrompts::Error(_err.to_string()),
-                                                );
-                                            },
+
+                                    if up_was_pressed {
+                                        if ui_state.command_line_inputs.is_empty() {
+                                            return;
+                                        }
+
+                                        if ui_state.command_line_input_index == 0 {
+                                            ui_state.command_line_buffer =
+                                                ui_state.command_line_inputs[0].clone();
+
+                                            ui_state.command_line_input_index += 1;
+                                        }
+                                        else if (ui_state.command_line_input_index as i32)
+                                            < ui_state.command_line_inputs.len() as i32
+                                        {
+                                            ui_state.command_line_buffer = ui_state
+                                                .command_line_inputs
+                                                [ui_state.command_line_input_index]
+                                                .clone();
+                                            ui_state.command_line_input_index += 1;
                                         }
                                     }
 
-                                    if !command_line_buffer.is_empty() {
-                                        //Store the command used
-                                        ui_state
-                                            .command_line_inputs
-                                            .push_front(command_line_buffer.clone());
-                                    }
+                                    if down_was_pressed {
+                                        if ui_state.command_line_input_index
+                                            == ui_state.command_line_inputs.len()
+                                        {
+                                            ui_state.command_line_buffer = ui_state
+                                                .command_line_inputs
+                                                [ui_state.command_line_input_index - 2]
+                                                .clone();
+                                            ui_state.command_line_input_index -= 2;
+                                        }
+                                        else if ui_state.command_line_input_index > 0 {
+                                            ui_state.command_line_input_index -= 1;
 
-                                    // Clear out the buffer regardless of the command being used.
-                                    ui_state.command_line_buffer.clear();
-                                }
-
-                                if up_was_pressed {
-                                    if ui_state.command_line_inputs.is_empty() {
-                                        return;
-                                    }
-
-                                    if ui_state.command_line_input_index == 0 {
-                                        ui_state.command_line_buffer =
-                                            ui_state.command_line_inputs[0].clone();
-
-                                        ui_state.command_line_input_index += 1;
-                                    }
-                                    else if (ui_state.command_line_input_index as i32)
-                                        < ui_state.command_line_inputs.len() as i32
-                                    {
-                                        ui_state.command_line_buffer = ui_state.command_line_inputs
-                                            [ui_state.command_line_input_index]
-                                            .clone();
-                                        ui_state.command_line_input_index += 1;
+                                            ui_state.command_line_buffer = ui_state
+                                                .command_line_inputs
+                                                [ui_state.command_line_input_index]
+                                                .clone();
+                                        }
+                                        else {
+                                            ui_state.command_line_buffer.clear();
+                                        }
                                     }
                                 }
-
-                                if down_was_pressed {
-                                    if ui_state.command_line_input_index
-                                        == ui_state.command_line_inputs.len()
-                                    {
-                                        ui_state.command_line_buffer = ui_state.command_line_inputs
-                                            [ui_state.command_line_input_index - 2]
-                                            .clone();
-                                        ui_state.command_line_input_index -= 2;
-                                    }
-                                    else if ui_state.command_line_input_index > 0 {
-                                        ui_state.command_line_input_index -= 1;
-
-                                        ui_state.command_line_buffer = ui_state.command_line_inputs
-                                            [ui_state.command_line_input_index]
-                                            .clone();
-                                    }
-                                    else {
-                                        ui_state.command_line_buffer.clear();
-                                    }
-                                }
-                            }
                             });
                         });
                     });
@@ -890,29 +1058,39 @@ pub fn main_ui(
                             });
 
                             ui.vertical(|ui| {
-                                ui.label(format!("Current step ({}/{}):", ui_state.demo_buffer.iter_idx, locked_buffer.len()));
+                                ui.label(format!(
+                                    "Current step ({}/{}):",
+                                    ui_state.demo_buffer.iter_idx + 1,
+                                    locked_buffer.len()
+                                ));
                                 ui.label(locked_buffer[ui_state.demo_buffer.iter_idx].to_string());
                             });
 
-                            if ui.button("▶").clicked() {
-                                let next_step = locked_buffer[ui_state.demo_buffer.iter_idx + 1]
-                                    .clone()
-                                    .execute_lua_function(lua_runtime.clone());
+                            ui.add_enabled_ui(
+                                ui_state.demo_buffer.iter_idx + 1 != locked_buffer.len(),
+                                |ui| {
+                                    if ui.button("▶").clicked() {
+                                        let next_step = locked_buffer
+                                            [ui_state.demo_buffer.iter_idx + 1]
+                                            .clone()
+                                            .execute_lua_function(lua_runtime.clone());
 
-                                match next_step {
-                                    Ok(_) => {
-                                        // If the action was successful increment the internal index
-                                        ui_state.demo_buffer.iter_idx += 1;
-                                    },
-                                    Err(err) => {
-                                        ui_state.toasts.lock().add(
-                                            Toast::new()
-                                                .kind(egui_toast::ToastKind::Error)
-                                                .text(format!("Demo runtime error: {err}")),
-                                        );
-                                    },
-                                }
-                            }
+                                        match next_step {
+                                            Ok(_) => {
+                                                // If the action was successful increment the internal index
+                                                ui_state.demo_buffer.iter_idx += 1;
+                                            },
+                                            Err(err) => {
+                                                ui_state.toasts.lock().add(
+                                                    Toast::new()
+                                                        .kind(egui_toast::ToastKind::Error)
+                                                        .text(format!("Demo error: {err}")),
+                                                );
+                                            },
+                                        }
+                                    }
+                                },
+                            );
                         });
                     });
                 });
@@ -926,4 +1104,17 @@ pub fn main_ui(
         //Reset the demo buffer thus existing the demo mode
         ui_state.demo_buffer.clear();
     }
+}
+
+/// This function reads the bytes available at the specific [`PathBuf`] path, and then Deserializes into type [`T`] from the bytes.
+/// This function uses [`rmp_serde`] to Deserialize.
+fn read_compressed_file_into<T: for<'a> Deserialize<'a>>(path: PathBuf) -> anyhow::Result<T>
+{
+    let bytes = fs::read(path)?;
+
+    let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
+
+    let deserialized_data = rmp_serde::from_slice::<T>(&decompressed_bytes)?;
+
+    Ok(deserialized_data)
 }
