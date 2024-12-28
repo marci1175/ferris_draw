@@ -12,15 +12,15 @@ use std::{collections::VecDeque, fs, path::PathBuf, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 
-use bevy::prelude::Resource;
-use egui_tiles::Tiles;
-use egui_toast::{Toast, Toasts};
-use indexmap::{set::MutableValues, IndexSet};
-
 use crate::{
     DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime, ScriptLinePrompts,
     DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
 };
+use base64::{engine::general_purpose::URL_SAFE, prelude::BASE64_STANDARD, Engine as _};
+use bevy::prelude::Resource;
+use egui_tiles::Tiles;
+use egui_toast::{Toast, Toasts};
+use indexmap::{set::MutableValues, IndexSet};
 
 /// This struct stores the UI's state, and is initalized from a save file.
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
@@ -89,6 +89,8 @@ pub struct UiState
     pub demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
     pub scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
+
+    pub demo_text_buffer: Arc<Mutex<String>>,
 }
 
 impl Default for UiState
@@ -122,6 +124,7 @@ impl Default for UiState
             demos: Arc::new(DashSet::new()),
             demo_buffer: DemoBuffer::new(vec![]),
             scripts: Arc::new(Mutex::new(IndexSet::new())),
+            demo_text_buffer: Arc::new(Mutex::new(String::new())),
         }
     }
 }
@@ -176,6 +179,8 @@ pub struct ManagerBehavior
     demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
     scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
+
+    demo_text_buffer: Arc<Mutex<String>>,
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, Hash)]
@@ -329,10 +334,11 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             ));
                                         }
 
-                                        let rename_menu = ui.menu_button("Rename script", |ui| {
+                                        let rename_menu = ui.menu_button("Rename Script", |ui| {
                                             ui.text_edit_singleline(
                                                 &mut *self.rename_buffer.lock(),
                                             );
+
                                             if ui.button("Rename").clicked() {
                                                 let name_buffer = &*self.rename_buffer.lock();
 
@@ -473,7 +479,30 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                     ui.separator();
 
-                    if ui.button("Import from Clipboard").clicked() {}
+                    ui.menu_button("Import from Text", |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("Import").clicked() {
+                                match BASE64_STANDARD.decode(self.demo_text_buffer.lock().to_string()) {
+                                    Ok(bytes) => {
+                                        let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
+                                        
+                                        let demo_instance = deserialize_bytes_into::<DemoInstance>(decompressed_bytes).unwrap();
+    
+                                        self.demos.insert(demo_instance);
+
+                                        ui.close_menu();
+                                    },
+                                    Err(_err) => {
+                                        self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text("Text copied from clipboard does not contain any DemoInstances."));
+                                    },
+                                }
+
+                                self.demo_text_buffer.lock().clear();
+                            }
+
+                            ui.text_edit_singleline(&mut *self.demo_text_buffer.lock());
+                        });
+                    }); 
                 });
 
                 ui.separator();
@@ -481,10 +510,10 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                 ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let mut modifiable_demo: Option<DemoInstance> = None;
+                        let mut modified_demo: Option<DemoInstance> = None;
 
-                        self.demos.iter().position(|demo| {
-                            let mut should_keep = true;
+                        let mut should_remove = false;
+                        self.demos.iter().for_each(|demo| {
                             let demo_name = demo.name.clone();
 
                             ui.horizontal(|ui| {
@@ -511,6 +540,8 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                         //Set the buffer
                                                         self.demo_buffer
                                                             .set_buffer(demo.demo_steps.clone());
+
+                                                        ui.close_menu();
                                                     },
                                                     Err(err) => {
                                                         self.toasts.lock().add(
@@ -531,49 +562,63 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     },
                                 );
 
-                                ui.menu_button("Settings", |ui| {
-                                    ui.horizontal(|ui| {
-                                        if ui.button("Delete").clicked() {
-                                            should_keep = false;
+                                ui.collapsing("Settings", |ui| {
+                                    if ui.button("Delete").clicked() {
+                                        //Indicate that we would like to remove this entry
+                                        should_remove = true;
+                                        modified_demo = Some(demo.clone());
 
-                                            //Insert the script into the rubbish bin
-                                            self.rubbish_bin
-                                                .insert(RubbishBinItem::Demo(demo.clone()));
-                                        }
+                                        //Insert the script into the rubbish bin
+                                        self.rubbish_bin.insert(RubbishBinItem::Demo(demo.clone()));
+                                    }
 
-                                        let rename_menu = ui.menu_button("Rename script", |ui| {
-                                            ui.text_edit_singleline(
-                                                &mut *self.rename_buffer.lock(),
-                                            );
+                                    let rename_menu = ui.menu_button("Rename Demo", |ui| {
+                                        ui.text_edit_singleline(&mut *self.rename_buffer.lock());
 
-                                            if ui.button("Rename").clicked() {
-                                                //Set the variable so that we will know which entry to modify and re-insert
-                                                modifiable_demo = Some(demo.clone());
-
-                                                //Flag the entry to be deleted
-                                                should_keep = false;
-                                            }
-                                        });
-
-                                        if rename_menu.response.clicked() {
-                                            *self.rename_buffer.lock() = demo.name.clone();
+                                        if ui.button("Rename").clicked() {
+                                            //Set the variable so that we will know which entry to modify and re-insert
+                                            modified_demo = Some(demo.clone());
                                         }
                                     });
 
-                                    if ui.button("Export as File").clicked() {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
-                                            .save_file()
-                                        {
+                                    if rename_menu.response.clicked() {
+                                        *self.rename_buffer.lock() = demo.name.clone();
+                                    }
+
+                                    ui.menu_button("Export", |ui| {
+                                        if ui.button("As File").clicked() {
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
+                                                .save_file()
+                                            {
+                                                let compressed_data =
+                                                    miniz_oxide::deflate::compress_to_vec(
+                                                        &rmp_serde::to_vec(&demo).unwrap(),
+                                                        CompressionLevel::BestCompression as u8,
+                                                    );
+
+                                                let _ = fs::write(path, compressed_data);
+                                                ui.close_menu();
+                                            }
+                                        }
+
+                                        if ui.button("To Clipboard").clicked() {
                                             let compressed_data =
                                                 miniz_oxide::deflate::compress_to_vec(
                                                     &rmp_serde::to_vec(&demo).unwrap(),
                                                     CompressionLevel::BestCompression as u8,
                                                 );
 
-                                            let _ = fs::write(path, compressed_data);
+                                            let base64_string =
+                                                BASE64_STANDARD.encode(compressed_data);
+
+                                            ui.output_mut(|output| {
+                                                output.copied_text = base64_string
+                                            });
+
+                                            ui.close_menu();
                                         }
-                                    }
+                                    });
 
                                     ui.separator();
 
@@ -592,14 +637,25 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         );
                                     });
 
-                                    ui.label(format!("Created: {}", demo.created_at.to_rfc3339()));
+                                    ui.menu_button("Information", |ui| {
+                                        ui.label(format!(
+                                            "Created: {}",
+                                            demo.created_at.to_rfc3339()
+                                        ));
+                                        ui.label(format!("Total steps: {}", demo.demo_steps.len()));
+                                    });
                                 });
                             });
-
-                            should_keep
                         });
 
-                        if let Some(mut demo) = modifiable_demo {
+                        if let Some(mut demo) = modified_demo {
+                            self.demos.remove(&demo);
+
+                            //If we should be removing this entry we should return from this point
+                            if should_remove {
+                                return;
+                            }
+
                             let name_buffer = &*self.rename_buffer.lock();
 
                             demo.name = name_buffer.clone();
@@ -785,6 +841,7 @@ pub fn main_ui(
                 let demos = ui_state.demos.clone();
                 let demo_buffer = ui_state.demo_buffer.clone();
                 let scripts = ui_state.scripts.clone();
+                let demo_text_buffer = ui_state.demo_text_buffer.clone();
 
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {
@@ -797,6 +854,7 @@ pub fn main_ui(
                         demos,
                         demo_buffer,
                         scripts,
+                        demo_text_buffer,
                     },
                     ui,
                 );
@@ -1060,7 +1118,7 @@ pub fn main_ui(
                             ui.vertical(|ui| {
                                 ui.label(format!(
                                     "Current step ({}/{}):",
-                                    ui_state.demo_buffer.iter_idx + 1,
+                                    ui_state.demo_buffer.iter_idx,
                                     locked_buffer.len()
                                 ));
                                 ui.label(locked_buffer[ui_state.demo_buffer.iter_idx].to_string());
@@ -1114,7 +1172,15 @@ fn read_compressed_file_into<T: for<'a> Deserialize<'a>>(path: PathBuf) -> anyho
 
     let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
 
-    let deserialized_data = rmp_serde::from_slice::<T>(&decompressed_bytes)?;
+    let deserialized_data = deserialize_bytes_into(decompressed_bytes)?;
 
+    Ok(deserialized_data)
+}
+
+fn deserialize_bytes_into<T: for<'a> Deserialize<'a>>(
+    decompressed_bytes: Vec<u8>,
+) -> Result<T, anyhow::Error>
+{
+    let deserialized_data = rmp_serde::from_slice::<T>(&decompressed_bytes)?;
     Ok(deserialized_data)
 }
