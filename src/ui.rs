@@ -294,25 +294,39 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                 //Draw separator line
                 ui.separator();
 
+                //Create scroll area for listing the scripts.
                 ScrollArea::both()
+                    // Set max height
                     .max_height(ui.available_height() - 200.)
+                    // Turn off auto shrinking
                     .auto_shrink([false, false])
+                    // Show the Ui inside the Scroll Area
                     .show(ui, |ui| {
+                        // Iter over the scripts, and move them to the rubbish bin if the closure return false.
                         self.scripts.lock().retain2(|script_instance| {
+                            // Define what we should do with this entry.
                             let mut should_keep = true;
 
+                            // Create a horizonal part of the ui
                             ui.horizontal(|ui| {
+                                // Dispaly the script's name
                                 ui.label(script_instance.name.clone());
 
+                                // Only enable the playing of the script if there arent any demo's being replayed or recorded.
                                 ui.add_enabled_ui(
                                     self.demo_buffer.get_state() == DemoBufferState::None,
                                     |ui| {
+                                        // Create the run button
                                         if ui.button("Run").clicked() {
+                                            // Pattern match an error and display it as a notification
                                             if let Err(err) = self
                                                 .lua_runtime
+                                                // Load the script as a string into the lua runtime
                                                 .load(script_instance.script.to_string())
+                                                // Execute the loaded string
                                                 .exec()
                                             {
+                                                // Add the error into the toasts if it returned an error
                                                 self.toasts.lock().add(
                                                     Toast::new()
                                                         .kind(egui_toast::ToastKind::Error)
@@ -323,15 +337,20 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     },
                                 );
 
+                                // Create a new ui part with a different id to avoid id collisions
                                 ui.push_id(script_instance.name.clone(), |ui| {
+                                    // Create the settings collapsing button
                                     ui.collapsing("Settings", |ui| {
+                                        // Display the Edit button, and if clicked display the code editor
                                         ui.menu_button("Edit", |ui| {
+                                            // Fetch the code theme from context
                                             let theme =
                                         egui_extras::syntax_highlighting::CodeTheme::from_memory(
                                             ui.ctx(),
                                             ui.style(),
                                         );
 
+                                        // Create a layouther to display or text correctly
                                             let mut layouter =
                                                 |ui: &egui::Ui, string: &str, wrap_width: f32| {
                                                     let mut layout_job =
@@ -346,16 +365,23 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                     ui.fonts(|f| f.layout_job(layout_job))
                                                 };
 
+                                            // Create a ScrollArea to be able to display / edit more text
                                             ScrollArea::both().show(ui, |ui| {
+                                                // Add the text editor with the custom layouter to the ui
                                                 ui.add(
                                                     TextEdit::multiline(
+                                                        // Mutable script reference
                                                         &mut script_instance.script,
                                                     )
+                                                    // Code editor
                                                     .code_editor()
+                                                    // Add the custom layouter
                                                     .layouter(&mut layouter),
                                                 );
                                             });
                                         });
+
+                                        // Add the delete button so that the script can be deleted
                                         if ui.button("Delete").clicked() {
                                             // Flag the script as to be deleted
                                             should_keep = false;
@@ -366,18 +392,24 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             ));
                                         }
 
+                                        // Display the rename menu button
                                         let rename_menu = ui.menu_button("Rename Script", |ui| {
+                                            // This text editor uses the rename_buffer to store the currently entered text in the buffer
                                             ui.text_edit_singleline(
                                                 &mut *self.rename_buffer.lock(),
                                             );
 
+                                            // Add the rename button to the ui
+                                            // If clicked the buffer's contains will be loaded into the script's name buffer.
                                             if ui.button("Rename").clicked() {
+                                                // Lock the rename buffer
                                                 let name_buffer = &*self.rename_buffer.lock();
 
+                                                // Modify the script instance's name
                                                 script_instance.name = name_buffer.clone();
                                             }
                                         });
-
+                                        
                                         if rename_menu.response.clicked() {
                                             *self.rename_buffer.lock() =
                                                 script_instance.name.clone();
