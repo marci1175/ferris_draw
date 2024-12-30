@@ -4,28 +4,29 @@ use bevy_egui::{
     EguiContexts,
 };
 use chrono::Local;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use egui_commonmark::{commonmark_str, CommonMarkCache};
 use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
+use mlua::Function;
 use serde::Deserialize;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs,
     path::PathBuf,
     sync::Arc,
 };
+use strum::IntoEnumIterator;
 
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime,
+    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime,
     ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
 };
 use base64::{prelude::BASE64_STANDARD, Engine as _};
 use bevy::prelude::Resource;
 use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
-use indexmap::{set::MutableValues, IndexSet};
 
 /// This struct stores the UI's state, and is initalized from a save file.
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
@@ -73,7 +74,7 @@ pub struct UiState
 
     /// This DashMap contains the deleted scripts.
     /// Scripts deleted from there pernament.
-    pub rubbish_bin: Arc<DashSet<RubbishBinItem>>,
+    pub rubbish_bin: Arc<Mutex<Vec<RubbishBinItem>>>,
 
     /// The CommonMarkCache is a cache which stores data about the documentation displayer widget.
     /// We need this to be able to display the documentation.
@@ -84,7 +85,7 @@ pub struct UiState
     pub documentation_window: bool,
 
     /// This field is used to store demos, which can be playbacked later.
-    pub demos: Arc<DashSet<DemoInstance>>,
+    pub demos: Arc<Mutex<Vec<DemoInstance>>>,
 
     /// This demo buffer is used when recording a demo for a script.
     /// If the demo is accessible a recording can't be started as it is only available when there is an ongoing recording.
@@ -94,7 +95,7 @@ pub struct UiState
     pub demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
     /// The list of scripts the project contains.
-    pub scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
+    pub scripts: Arc<Mutex<Vec<ScriptInstance>>>,
 
     /// The demos' rename text buffer.
     pub demo_rename_text_buffer: Arc<Mutex<String>>,
@@ -125,12 +126,12 @@ impl Default for UiState
             command_line_buffer: String::new(),
             command_line_inputs: VecDeque::new(),
             command_line_input_index: 0,
-            rubbish_bin: Arc::new(DashSet::new()),
+            rubbish_bin: Arc::new(Mutex::new(vec![])),
             common_mark_cache: CommonMarkCache::default(),
             documentation_window: false,
-            demos: Arc::new(DashSet::new()),
+            demos: Arc::new(Mutex::new(vec![])),
             demo_buffer: DemoBuffer::new(vec![]),
-            scripts: Arc::new(Mutex::new(IndexSet::new())),
+            scripts: Arc::new(Mutex::new(vec![])),
             demo_rename_text_buffer: Arc::new(Mutex::new(String::new())),
         }
     }
@@ -151,7 +152,7 @@ pub enum ManagerPane
     RubbishBin,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RubbishBinItem
 {
     Script(ScriptInstance),
@@ -178,17 +179,17 @@ pub struct ManagerBehavior
 
     /// This DashMap contains the deleted scripts.
     /// Scripts deleted from there pernament.
-    rubbish_bin: Arc<DashSet<RubbishBinItem>>,
+    rubbish_bin: Arc<Mutex<Vec<RubbishBinItem>>>,
 
     /// This field is used to store demos, which can be playbacked later.
-    demos: Arc<DashSet<DemoInstance>>,
+    demos: Arc<Mutex<Vec<DemoInstance>>>,
 
     /// This buffer is used when recording a demo, or when playbacking one.
     /// The [`DemoBuffer`] can have multiple "states" depending on what its used for to create custom behavior.
     demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
     /// The list of scripts the project contains.
-    scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
+    scripts: Arc<Mutex<Vec<ScriptInstance>>>,
 
     /// The demos' rename text buffer.
     demo_rename_text_buffer: Arc<Mutex<String>>,
@@ -196,21 +197,34 @@ pub struct ManagerBehavior
 
 /// A [`ScriptInstance`] holds information about one script.
 /// It contains the script's name, and the script itself.
-#[derive(Default, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
 pub struct ScriptInstance
 {
+    /// Is the script running.
+    #[serde(skip)]
+    pub is_running: bool,
     /// The name of the script.
-    name: String,
+    pub name: String,
     /// The script itself.
-    script: String,
+    pub script: String,
+
+    /// The list of callback this script has.
+    /// This field gets updated every script start
+    #[serde(skip)]
+    pub callbacks: HashMap<CallbackType, Function>,
 }
 
 impl ScriptInstance
-{   
+{
     /// Creates a new [`ScriptInstance`].
     pub fn new(name: String, script: String) -> Self
     {
-        Self { name, script }
+        Self {
+            is_running: false,
+            name,
+            script,
+            callbacks: HashMap::new(),
+        }
     }
 }
 
@@ -251,7 +265,10 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         let mut script_handle = self.scripts.lock();
 
                                         // Insert new ScriptInstance
-                                        script_handle.insert(ScriptInstance { name: name_buffer.clone(), script: String::new() });
+                                        script_handle.push(ScriptInstance::new(
+                                            name_buffer.clone(),
+                                            String::new(),
+                                        ));
 
                                         // Clear the name buffer so that wehn creating a new script the text wont be there anymore
                                         name_buffer.clear();
@@ -276,20 +293,33 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                 // Pattern math reading a String out from it
                                 match fs::read_to_string(&path) {
                                     Ok(file_content) => {
-                                        // If we could read the file content load the read file into a script instance which we insert into the list 
-                                        self.scripts.lock().insert(ScriptInstance::new(path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(), file_content));
-                                        
+                                        // If we could read the file content load the read file into a script instance which we insert into the list
+                                        self.scripts.lock().push(ScriptInstance::new(
+                                            path.file_name()
+                                                .unwrap_or_default()
+                                                .to_str()
+                                                .unwrap_or_default()
+                                                .to_string(),
+                                            file_content,
+                                        ));
+
                                         // Close menu if we could read successfully
                                         ui.close_menu();
                                     },
                                     Err(_err) => {
                                         // Display any kind of error to a notification
-                                        self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Reading from file ({}) failed: {_err}", path.display())));
+                                        self.toasts.lock().add(
+                                            Toast::new().kind(egui_toast::ToastKind::Error).text(
+                                                format!(
+                                                    "Reading from file ({}) failed: {_err}",
+                                                    path.display()
+                                                ),
+                                            ),
+                                        );
                                     },
                                 }
                             }
                         }
-
                     });
                 });
 
@@ -305,7 +335,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     // Show the Ui inside the Scroll Area
                     .show(ui, |ui| {
                         // Iter over the scripts, and move them to the rubbish bin if the closure return false.
-                        self.scripts.lock().retain2(|script_instance| {
+                        self.scripts.lock().retain_mut(|script_instance| {
                             // Define what we should do with this entry.
                             let mut should_keep = true;
 
@@ -319,22 +349,48 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     self.demo_buffer.get_state() == DemoBufferState::None,
                                     |ui| {
                                         // Create the run button
-                                        if ui.button("Run").clicked() {
-                                            // Pattern match an error and display it as a notification
-                                            if let Err(err) = self
-                                                .lua_runtime
-                                                // Load the script as a string into the lua runtime
-                                                .load(script_instance.script.to_string())
-                                                // Execute the loaded string
-                                                .exec()
-                                            {
-                                                // Add the error into the toasts if it returned an error
-                                                self.toasts.lock().add(
-                                                    Toast::new()
-                                                        .kind(egui_toast::ToastKind::Error)
-                                                        .text(err.to_string()),
-                                                );
-                                            };
+                                        match script_instance.is_running {
+                                            false => {
+                                                if ui.button("Run").clicked() {
+                                                    script_instance.is_running = true;
+                                                    
+                                                    // Run the script
+                                                    // Pattern match an error and display it as a notification
+                                                    if let Err(err) = self
+                                                    .lua_runtime
+                                                    // Load the script as a string into the lua runtime
+                                                    .load(script_instance.script.to_string())
+                                                    // Execute the loaded string
+                                                    .exec()
+                                                    {
+                                                        // Add the error into the toasts if it returned an error
+                                                        self.toasts.lock().add(
+                                                            Toast::new()
+                                                                .kind(egui_toast::ToastKind::Error)
+                                                                .text(err.to_string()),
+                                                        );
+
+                                                        script_instance.is_running = false;
+                                                        return;
+                                                    };
+
+                                                    for callback_type in CallbackType::iter() {
+                                                        if let Ok(function) = self.lua_runtime.globals().get::<Function>(callback_type.to_string()) {
+                                                            script_instance.callbacks.insert(callback_type, function);
+                                                        }
+                                                    }
+
+                                                    // If there were no callbacks we can reset the state since nothing is getting called by the app at runtime
+                                                    if script_instance.callbacks.is_empty() {
+                                                        script_instance.is_running = false;
+                                                    }
+                                                }
+                                            },
+                                            true => {
+                                                if ui.button("Stop").clicked() {
+                                                    script_instance.is_running = false;
+                                                }
+                                            },
                                         }
                                     },
                                 );
@@ -343,43 +399,46 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                 ui.push_id(script_instance.name.clone(), |ui| {
                                     // Create the settings collapsing button
                                     ui.collapsing("Settings", |ui| {
-                                        // Display the Edit button, and if clicked display the code editor
-                                        ui.menu_button("Edit", |ui| {
-                                            // Fetch the code theme from context
-                                            let theme =
-                                        egui_extras::syntax_highlighting::CodeTheme::from_memory(
-                                            ui.ctx(),
-                                            ui.style(),
-                                        );
-
-                                        // Create a layouther to display or text correctly
-                                            let mut layouter =
-                                                |ui: &egui::Ui, string: &str, wrap_width: f32| {
-                                                    let mut layout_job =
-                                                        egui_extras::syntax_highlighting::highlight(
-                                                            ui.ctx(),
-                                                            ui.style(),
-                                                            &theme,
-                                                            string,
-                                                            "lua",
-                                                        );
-                                                    layout_job.wrap.max_width = wrap_width;
-                                                    ui.fonts(|f| f.layout_job(layout_job))
-                                                };
-
-                                            // Create a ScrollArea to be able to display / edit more text
-                                            ScrollArea::both().show(ui, |ui| {
-                                                // Add the text editor with the custom layouter to the ui
-                                                ui.add(
-                                                    TextEdit::multiline(
-                                                        // Mutable script reference
-                                                        &mut script_instance.script,
-                                                    )
-                                                    // Code editor
-                                                    .code_editor()
-                                                    // Add the custom layouter
-                                                    .layouter(&mut layouter),
-                                                );
+                                        // Display the Edit button, and if clicked display the code editor.
+                                        // Only enable it if it isnt running yet.
+                                        ui.add_enabled_ui(!script_instance.is_running, |ui| {
+                                            ui.menu_button("Edit", |ui| {
+                                                // Fetch the code theme from context
+                                                let theme =
+                                            egui_extras::syntax_highlighting::CodeTheme::from_memory(
+                                                ui.ctx(),
+                                                ui.style(),
+                                            );
+    
+                                            // Create a layouther to display or text correctly
+                                                let mut layouter =
+                                                    |ui: &egui::Ui, string: &str, wrap_width: f32| {
+                                                        let mut layout_job =
+                                                            egui_extras::syntax_highlighting::highlight(
+                                                                ui.ctx(),
+                                                                ui.style(),
+                                                                &theme,
+                                                                string,
+                                                                "lua",
+                                                            );
+                                                        layout_job.wrap.max_width = wrap_width;
+                                                        ui.fonts(|f| f.layout_job(layout_job))
+                                                    };
+    
+                                                // Create a ScrollArea to be able to display / edit more text
+                                                ScrollArea::both().show(ui, |ui| {
+                                                    // Add the text editor with the custom layouter to the ui
+                                                    ui.add(
+                                                        TextEdit::multiline(
+                                                            // Mutable script reference
+                                                            &mut script_instance.script,
+                                                        )
+                                                        // Code editor
+                                                        .code_editor()
+                                                        // Add the custom layouter
+                                                        .layouter(&mut layouter),
+                                                    );
+                                                });
                                             });
                                         });
 
@@ -389,7 +448,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             should_keep = false;
 
                                             //Insert the script into the rubbish bin
-                                            self.rubbish_bin.insert(RubbishBinItem::Script(
+                                            self.rubbish_bin.lock().push(RubbishBinItem::Script(
                                                 script_instance.clone(),
                                             ));
                                         }
@@ -488,7 +547,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                     };
 
                                                     // Load the demo into the list
-                                                    self.demos.insert(demo_instance);
+                                                    self.demos.lock().push(demo_instance);
                                                 },
                                                 Err(err) => {
                                                     // Display the error if there were any
@@ -499,6 +558,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                                 "Failed to create Demo: {err}"
                                                             )),
                                                     );
+
+                                                    //Reset script state
+                                                    script_instance.is_running = false;
                                                 },
                                             }
 
@@ -559,7 +621,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                         {
                             match read_compressed_file_into::<DemoInstance>(path) {
                                 Ok(save_file) => {
-                                    self.demos.insert(save_file);
+                                    self.demos.lock().push(save_file);
                                 },
                                 Err(err) => {
                                     self.toasts.lock().add(
@@ -583,7 +645,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         
                                         let demo_instance = deserialize_bytes_into::<DemoInstance>(decompressed_bytes).unwrap();
     
-                                        self.demos.insert(demo_instance);
+                                        self.demos.lock().push(demo_instance);
 
                                         ui.close_menu();
                                     },
@@ -605,10 +667,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                 ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let mut modified_demo: Option<DemoInstance> = None;
-
-                        let mut should_remove = false;
-                        for (idx, demo) in self.demos.iter().enumerate() {
+                        let mut idx = 0;
+                        self.demos.lock().retain_mut(|demo| {
+                            let mut should_retain = true;
                             let demo_name = demo.name.clone();
 
                             ui.horizontal(|ui| {
@@ -662,22 +723,21 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     ui.collapsing("Settings", |ui| {
                                         if ui.button("Delete").clicked() {
                                             //Indicate that we would like to remove this entry
-                                            should_remove = true;
-                                            modified_demo = Some(demo.clone());
+                                            should_retain = false;
 
                                             //Insert the script into the rubbish bin
                                             self.rubbish_bin
-                                                .insert(RubbishBinItem::Demo(demo.clone()));
+                                                .lock()
+                                                .push(RubbishBinItem::Demo(demo.clone()));
                                         }
 
                                         let rename_menu = ui.menu_button("Rename Demo", |ui| {
-                                            ui.text_edit_singleline(
-                                                &mut *self.rename_buffer.lock(),
-                                            );
+                                            let rename_buffer = &mut *self.rename_buffer.lock();
+                                            ui.text_edit_singleline(rename_buffer);
 
                                             if ui.button("Rename").clicked() {
                                                 //Set the variable so that we will know which entry to modify and re-insert
-                                                modified_demo = Some(demo.clone());
+                                                demo.name = rename_buffer.clone()
                                             }
                                         });
 
@@ -750,29 +810,19 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     });
                                 });
                             });
-                        }
 
-                        if let Some(mut demo) = modified_demo {
-                            self.demos.remove(&demo);
+                            //Increment idx
+                            idx += 1;
 
-                            //If we should be removing this entry we should return from this point
-                            if should_remove {
-                                return;
-                            }
-
-                            let name_buffer = &*self.rename_buffer.lock();
-
-                            demo.name = name_buffer.clone();
-
-                            self.demos.insert(demo);
-                        }
+                            should_retain
+                        });
                     });
             },
             ManagerPane::RubbishBin => {
                 ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.rubbish_bin.retain(|item| {
+                        self.rubbish_bin.lock().retain(|item| {
                             let mut should_be_retained = true;
                             match item {
                                 RubbishBinItem::Script(script_instance) => {
@@ -782,7 +832,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                         if ui.button("Restore").clicked() {
                                             // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
-                                            self.scripts.lock().insert(script_instance.clone());
+                                            self.scripts.lock().push(script_instance.clone());
 
                                             // Flag it to be deleted finally from this hashmap.
                                             should_be_retained = false;
@@ -803,7 +853,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         ui.label(demo_instance.name.clone());
                                         if ui.button("Restore").clicked() {
                                             // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
-                                            self.demos.insert(demo_instance.clone());
+                                            self.demos.lock().push(demo_instance.clone());
 
                                             // Flag it to be deleted finally from this hashmap.
                                             should_be_retained = false;
@@ -818,27 +868,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         };
                                     });
                                 },
-                                // &RubbishBinItem::Drawer(drawer) => {
-                                //     ui.horizontal(|ui| {
-                                //         ui.label(RichText::from("Drawer").weak());
-                                //         ui.label(drawer.name.clone());
-                                //         if ui.button("Restore").clicked() {
-                                //             // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
-                                //             self.demos.insert(demo_instance.clone());
-
-                                //             // Flag it to be deleted finally from this hashmap.
-                                //             should_be_retained = false;
-                                //         };
-
-                                //         if ui
-                                //             .button(RichText::from("Delete").color(Color32::RED))
-                                //             .clicked()
-                                //         {
-                                //             // Flag it to be deleted finally.
-                                //             should_be_retained = false;
-                                //         };
-                                //     });
-                                // }
                             }
 
                             // Return the final value.
@@ -856,8 +885,8 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
         match pane {
             ManagerPane::ScriptManager => format!("Scripts: {}", self.scripts.lock().len()),
             ManagerPane::EntityManager => format!("Entities: {}", self.drawers.len()),
-            ManagerPane::DemoManager => format!("Demos: {}", self.demos.len()),
-            ManagerPane::RubbishBin => format!("Deleted: {}", self.rubbish_bin.len()),
+            ManagerPane::DemoManager => format!("Demos: {}", self.demos.lock().len()),
+            ManagerPane::RubbishBin => format!("Deleted: {}", self.rubbish_bin.lock().len()),
         }
         .into()
     }
@@ -871,6 +900,40 @@ pub fn main_ui(
 )
 {
     let ctx = contexts.ctx_mut();
+
+    ctx.input(|reader| {
+        if reader.focused {
+            let keys_down = reader.keys_down.clone();
+
+            for script in ui_state.scripts.lock().iter_mut() {
+                // If the script is not running dont call its callbacks
+                if !script.is_running {
+                    continue;
+                }
+
+                // If the script has a registered OnInput callback we can invoke the function
+                if let Some(function) = script.callbacks.get(&CallbackType::OnInput) {
+                    let itered_keys = keys_down
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, key)| (idx, key.name().to_string()));
+
+                    if let Err(err) =
+                        function.call::<()>(lua_runtime.create_table_from(itered_keys))
+                    {
+                        // Add the error into the toasts if it returned an error
+                        ui_state.toasts.lock().add(
+                            Toast::new()
+                                .kind(egui_toast::ToastKind::Error)
+                                .text(err.to_string()),
+                        );
+
+                        script.is_running = false;
+                    };
+                };
+            }
+        }
+    });
 
     egui_extras::install_image_loaders(ctx);
 

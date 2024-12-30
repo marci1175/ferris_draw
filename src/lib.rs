@@ -1,6 +1,13 @@
 pub const DEMO_FILE_EXTENSION: &str = "demo";
 pub const PROJECT_FILE_EXTENSION: &str = "save";
 
+use bevy::{
+    asset::RenderAssetUsages,
+    color::Color,
+    math::{Vec2, Vec3, Vec4},
+    prelude::{Component, Mesh, Res, ResMut, Resource},
+    render::mesh::PrimitiveTopology,
+};
 use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
@@ -9,21 +16,14 @@ use std::{
         Arc,
     },
 };
-
-use bevy::{
-    asset::RenderAssetUsages,
-    color::Color,
-    math::{Vec2, Vec3, Vec4},
-    prelude::{Component, Mesh, Res, ResMut, Resource},
-    render::mesh::PrimitiveTopology,
-};
+use strum::{EnumCount, EnumIter};
 
 pub mod ui;
 use chrono::{DateTime, Local};
 use dashmap::DashMap;
 use egui_toast::{Toast, Toasts};
 use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
-use mlua::{Error, Lua};
+use mlua::{Error, Function, Lua};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use typed_floats::NonNaN;
@@ -94,7 +94,7 @@ impl<T: Default> DemoBuffer<T>
 
 /// The DemoInstance is used to store demos of scripts.
 /// These contain a script identifier, so that we can notify the user if their code has changed since the last demo recording.
-#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug, Eq, Hash)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct DemoInstance
 {
@@ -116,7 +116,7 @@ impl PartialEq for DemoInstance
 /// The items of this enum contain the functions a user can call on their turtles.
 /// When recording a demo these are stored and can later be playbacked.
 /// All of the arguments to the functions are contained in the enum variants.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub enum DemoStep
 {
     New(String),
@@ -356,36 +356,46 @@ pub fn color_into_vec4(color: Color) -> Vec4
 #[derive(Debug, Clone, PartialEq)]
 pub struct Angle(bevy::text::cosmic_text::Angle);
 
-impl Deref for Angle {
+impl Deref for Angle
+{
     type Target = bevy::text::cosmic_text::Angle;
 
-    fn deref(&self) -> &Self::Target {
+    fn deref(&self) -> &Self::Target
+    {
         &self.0
     }
 }
 
-impl Angle {
-    fn from_degrees(degrees: f32) -> Self {
+impl Angle
+{
+    fn from_degrees(degrees: f32) -> Self
+    {
         Self(bevy::text::cosmic_text::Angle::from_degrees(degrees))
     }
 }
 
-impl Serialize for Angle {
+impl Serialize for Angle
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         let angle_radians = self.0.to_radians();
 
         angle_radians.serialize(serializer)
     }
 }
 
-impl<'de> Deserialize<'de> for Angle {
+impl<'de> Deserialize<'de> for Angle
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
-            let angle_value: f32 = Deserialize::deserialize(deserializer)?;
-            Ok(Angle(bevy::text::cosmic_text::Angle::from_radians(angle_value)))
+        D: serde::Deserializer<'de>,
+    {
+        let angle_value: f32 = Deserialize::deserialize(deserializer)?;
+        Ok(Angle(bevy::text::cosmic_text::Angle::from_radians(
+            angle_value,
+        )))
     }
 }
 
@@ -1038,6 +1048,40 @@ pub fn init_lua_functions(
     lua_vm.globals().set("notification", notification).unwrap();
     lua_vm.globals().set("position", position).unwrap();
     lua_vm.globals().set("rectangle", rectangle).unwrap();
+}
+
+#[derive(EnumIter, EnumCount, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallbackType
+{
+    OnDraw,
+    OnInput,
+    OnParameterChange,
+}
+
+impl Display for CallbackType
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    {
+        f.write_str(match &self {
+            CallbackType::OnDraw => "on_draw",
+            CallbackType::OnInput => "on_input",
+            CallbackType::OnParameterChange => "on_param_change",
+        })
+    }
+}
+
+pub fn function_callback(argument: Option<String>, function: Function) -> anyhow::Result<()>
+{
+    match argument {
+        Some(arg) => {
+            function.call::<String>(arg)?;
+        },
+        None => {
+            function.call::<()>(())?;
+        },
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
