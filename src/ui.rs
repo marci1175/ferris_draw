@@ -83,7 +83,6 @@ pub struct UiState
     pub documentation_window: bool,
 
     /// This field is used to store demos, which can be playbacked later.
-    /// One script can only have one demo.
     pub demos: Arc<DashSet<DemoInstance>>,
 
     /// This demo buffer is used when recording a demo for a script.
@@ -179,30 +178,41 @@ pub struct ManagerBehavior
     /// Scripts deleted from there pernament.
     rubbish_bin: Arc<DashSet<RubbishBinItem>>,
 
+    /// This field is used to store demos, which can be playbacked later.
     demos: Arc<DashSet<DemoInstance>>,
 
+    /// This buffer is used when recording a demo, or when playbacking one.
+    /// The [`DemoBuffer`] can have multiple "states" depending on what its used for to create custom behavior.
     demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
+    /// The list of scripts the project contains.
     scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
 
-    demo_text_buffer: Arc<Mutex<String>>,
+    /// The demos' rename text buffer.
+    demo_rename_text_buffer: Arc<Mutex<String>>,
 }
 
+/// A [`ScriptInstance`] holds information about one script.
+/// It contains the script's name, and the script itself.
 #[derive(Default, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct ScriptInstance
 {
+    /// The name of the script.
     name: String,
+    /// The script itself.
     script: String,
 }
 
 impl ScriptInstance
-{
+{   
+    /// Creates a new [`ScriptInstance`].
     pub fn new(name: String, script: String) -> Self
     {
         Self { name, script }
     }
 }
 
+/// Implement tiles for the ManagerBehavior so that it can be dsiplayed.
 impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 {
     fn pane_ui(
@@ -214,57 +224,74 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
     {
         match pane {
             ManagerPane::ScriptManager => {
+                // Create inner margin to make it look nicer
                 ui.allocate_space(vec2(ui.available_width(), 2.));
 
+                // Allocate ui for the script adding menu button
                 ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
+                    // Lock the name buffer so that it can be accessed later, without a deadlock
                     let name_buffer = &mut *self.name_buffer.lock();
 
+                    // Add script menu button widget
                     ui.menu_button("Add Script", |ui| {
-                        ui.allocate_ui(vec2(ui.available_width(), 70.), |ui| {
+                        // Allocate ui for the script creating by name
+                        // We allocate 0. for the height so that it only takes how much it needs and nothing more.
+                        ui.allocate_ui(vec2(ui.available_width(), 0.), |ui| {
+                            // Horizontally center the inner widgets of the menu button
                             ui.horizontal_centered(|ui| {
-                                    ui.add_enabled_ui(!name_buffer.is_empty(), |ui| {
+                                // Only enable the add button if the name buffer isnt empty
+                                ui.add_enabled_ui(!name_buffer.is_empty(), |ui| {
+                                    // Create the add button
                                     let add_button = ui.button("Add");
 
                                     if add_button.clicked() {
+                                        // Lock the script's list handle
                                         let mut script_handle = self.scripts.lock();
 
-                                        if !script_handle.iter().any(|script| script.name == *name_buffer) {
-                                            script_handle.insert(ScriptInstance { name: name_buffer.clone(), script: String::new() });
+                                        // Insert new ScriptInstance
+                                        script_handle.insert(ScriptInstance { name: name_buffer.clone(), script: String::new() });
 
-                                            name_buffer.clear();
+                                        // Clear the name buffer so that wehn creating a new script the text wont be there anymore
+                                        name_buffer.clear();
 
-                                            ui.close_menu();
-                                        }
-                                        else {
-                                            self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("The script named: {name_buffer} already exists. Please choose another name or rename an existing script.")));
-                                        }
+                                        // Close menu after adding a new scirpt
+                                        ui.close_menu();
                                     }
                                 });
 
+                                // Create the text editor widget so that the buffer can be edited
                                 ui.add(TextEdit::singleline(name_buffer).hint_text("Name"));
                             });
                         });
 
+                        // Draw separator line
                         ui.separator();
 
+                        // Create import from file button
                         if ui.button("Import from File").clicked() {
+                            // If the user has selected a file patter match the path
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                // Pattern math reading a String out from it
                                 match fs::read_to_string(&path) {
                                     Ok(file_content) => {
+                                        // If we could read the file content load the read file into a script instance which we insert into the list 
                                         self.scripts.lock().insert(ScriptInstance::new(path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(), file_content));
+                                        
+                                        // Close menu if we could read successfully
+                                        ui.close_menu();
                                     },
                                     Err(_err) => {
+                                        // Display any kind of error to a notification
                                         self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Reading from file ({}) failed: {_err}", path.display())));
                                     },
                                 }
-
-                                ui.close_menu();
                             }
                         }
 
                     });
                 });
 
+                //Draw separator line
                 ui.separator();
 
                 ScrollArea::both()
@@ -490,7 +517,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     ui.menu_button("Import from Text", |ui| {
                         ui.horizontal(|ui| {
                             if ui.button("Import").clicked() {
-                                match BASE64_STANDARD.decode(self.demo_text_buffer.lock().to_string()) {
+                                match BASE64_STANDARD.decode(self.demo_rename_text_buffer.lock().to_string()) {
                                     Ok(bytes) => {
                                         let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
                                         
@@ -505,10 +532,10 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     },
                                 }
 
-                                self.demo_text_buffer.lock().clear();
+                                self.demo_rename_text_buffer.lock().clear();
                             }
 
-                            ui.text_edit_singleline(&mut *self.demo_text_buffer.lock());
+                            ui.text_edit_singleline(&mut *self.demo_rename_text_buffer.lock());
                         });
                     }); 
                 });
@@ -871,7 +898,7 @@ pub fn main_ui(
                         demos,
                         demo_buffer,
                         scripts,
-                        demo_text_buffer,
+                        demo_rename_text_buffer: demo_text_buffer,
                     },
                     ui,
                 );
