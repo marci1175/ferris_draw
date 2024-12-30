@@ -80,6 +80,7 @@ pub struct UiState
     #[serde(skip)]
     pub common_mark_cache: CommonMarkCache,
 
+    /// If the Documentation window is open.
     pub documentation_window: bool,
 
     /// This field is used to store demos, which can be playbacked later.
@@ -92,9 +93,11 @@ pub struct UiState
     #[serde(skip)]
     pub demo_buffer: DemoBuffer<Vec<DemoStep>>,
 
+    /// The list of scripts the project contains.
     pub scripts: Arc<Mutex<IndexSet<ScriptInstance>>>,
 
-    pub demo_text_buffer: Arc<Mutex<String>>,
+    /// The demos' rename text buffer.
+    pub demo_rename_text_buffer: Arc<Mutex<String>>,
 }
 
 impl Default for UiState
@@ -128,7 +131,7 @@ impl Default for UiState
             demos: Arc::new(DashSet::new()),
             demo_buffer: DemoBuffer::new(vec![]),
             scripts: Arc::new(Mutex::new(IndexSet::new())),
-            demo_text_buffer: Arc::new(Mutex::new(String::new())),
+            demo_rename_text_buffer: Arc::new(Mutex::new(String::new())),
         }
     }
 }
@@ -153,7 +156,6 @@ pub enum RubbishBinItem
 {
     Script(ScriptInstance),
     Demo(DemoInstance),
-    // Drawer(crate::Drawer),
 }
 
 /// The manager panel's inner behavior, the data it contains, this can be used to share data over to the tabs from the main ui.
@@ -777,6 +779,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::from("Script").weak());
                                         ui.label(script_instance.name.clone());
+
                                         if ui.button("Restore").clicked() {
                                             // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
                                             self.scripts.lock().insert(script_instance.clone());
@@ -815,6 +818,27 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         };
                                     });
                                 },
+                                // &RubbishBinItem::Drawer(drawer) => {
+                                //     ui.horizontal(|ui| {
+                                //         ui.label(RichText::from("Drawer").weak());
+                                //         ui.label(drawer.name.clone());
+                                //         if ui.button("Restore").clicked() {
+                                //             // Since the HashMap entries are copied over to the `rubbish_bin` the keys and the values all match.
+                                //             self.demos.insert(demo_instance.clone());
+
+                                //             // Flag it to be deleted finally from this hashmap.
+                                //             should_be_retained = false;
+                                //         };
+
+                                //         if ui
+                                //             .button(RichText::from("Delete").color(Color32::RED))
+                                //             .clicked()
+                                //         {
+                                //             // Flag it to be deleted finally.
+                                //             should_be_retained = false;
+                                //         };
+                                //     });
+                                // }
                             }
 
                             // Return the final value.
@@ -943,7 +967,7 @@ pub fn main_ui(
                 let demos = ui_state.demos.clone();
                 let demo_buffer = ui_state.demo_buffer.clone();
                 let scripts = ui_state.scripts.clone();
-                let demo_text_buffer = ui_state.demo_text_buffer.clone();
+                let demo_text_buffer = ui_state.demo_rename_text_buffer.clone();
 
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {

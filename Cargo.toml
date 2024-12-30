@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 serde = {version = "1.0.215", features = ["derive"]}
-bevy = {version = "0.15", features = ["async-io"]}
+bevy = {version = "0.15", features = ["async-io", "serialize"]}
 bevy_egui = {version = "0.31", features = ["serde"]}
 mlua = {version = "0.10.2", features = ["luajit", "vendored", "async", "send"]}
 mlua-sys = {version = "0.6.6", features = ["luajit", "vendored"]}

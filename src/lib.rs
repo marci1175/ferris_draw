@@ -16,7 +16,6 @@ use bevy::{
     math::{Vec2, Vec3, Vec4},
     prelude::{Component, Mesh, Res, ResMut, Resource},
     render::mesh::PrimitiveTopology,
-    text::cosmic_text::Angle,
 };
 
 pub mod ui;
@@ -256,7 +255,7 @@ pub enum ScriptLinePrompts
 pub struct DrawerMesh;
 
 /// A list of points that will have a line drawn between each consecutive points
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LineStrip
 {
     pub points: Vec<(Vec3, Color)>,
@@ -299,7 +298,7 @@ impl From<LineStrip> for Mesh
 }
 
 /// A list of points that will have polygon created from them
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilledPolygonPoints
 {
     pub points: Vec<Vec3>,
@@ -354,8 +353,44 @@ pub fn color_into_vec4(color: Color) -> Vec4
     )
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Angle(bevy::text::cosmic_text::Angle);
+
+impl Deref for Angle {
+    type Target = bevy::text::cosmic_text::Angle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Angle {
+    fn from_degrees(degrees: f32) -> Self {
+        Self(bevy::text::cosmic_text::Angle::from_degrees(degrees))
+    }
+}
+
+impl Serialize for Angle {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        let angle_radians = self.0.to_radians();
+
+        angle_radians.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Angle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de> {
+            let angle_value: f32 = Deserialize::deserialize(deserializer)?;
+            Ok(Angle(bevy::text::cosmic_text::Angle::from_radians(angle_value)))
+    }
+}
+
 /// The information of the Drawer
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drawer
 {
     /// Whether the Drawer should draw.
@@ -374,7 +409,7 @@ pub struct Drawer
     pub color: Color,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Drawings
 {
     pub lines: Vec<LineStrip>,
