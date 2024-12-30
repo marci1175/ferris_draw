@@ -409,42 +409,58 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                 script_instance.name = name_buffer.clone();
                                             }
                                         });
-                                        
+
+                                        // If the rename menu is clicked clear the buffer
                                         if rename_menu.response.clicked() {
+                                            // Clear the buffer
                                             *self.rename_buffer.lock() =
                                                 script_instance.name.clone();
                                         }
 
+                                        // Add the Export as File button
                                         if ui.button("Export as File").clicked() {
+                                            // If the user has selected a place to save the file pattern match that path, otherwise dont do anything
                                             if let Some(path) = rfd::FileDialog::new()
+                                                // Set the file's name in the file dialog
                                                 .set_file_name(script_instance.name.clone())
+                                                // Add a filter to the file extiension
                                                 .add_filter("Lua", &["lua"])
+                                                //Select the type of FileDialog
                                                 .save_file()
                                             {
+                                                // Write the text to the path
                                                 fs::write(path, script_instance.script.clone())
                                                     .unwrap();
                                             }
                                         }
 
+                                        // Draw a separator
                                         ui.separator();
 
+                                        // Add the Create demo button
                                         if ui.button("Create Demo").clicked() {
                                             //Store current drawers and canvas
                                             let current_drawer_canvas =
                                                 Drawers(Arc::new(DashMap::clone(&self.drawers.0)));
 
+                                            //Clear the canvas, so that the demo creator has a clear canvas
                                             self.drawers.clear();
 
                                             //Set Demo buffer state
                                             self.demo_buffer.set_state(DemoBufferState::Record);
 
                                             //Run lua script
+                                            // If the DemoBuffer is in the [`Record`] state the lua runtime will automaticly load the called functions (created by the applications) into the demo buffer with their arguments
                                             match self
                                                 .lua_runtime
+                                                // Load the script as a string
                                                 .load(script_instance.script.clone())
+                                                // Execute the String
                                                 .exec()
                                             {
+                                                // The script has finished executing
                                                 Ok(_output) => {
+                                                    // Get the demo's steps, while draining it from the original buffer
                                                     let demo_steps: Vec<DemoStep> = self
                                                         .demo_buffer
                                                         .buffer
@@ -452,20 +468,28 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                         .drain(..)
                                                         .collect();
 
+                                                    // Get current local date time
                                                     let current_date_time = Local::now();
-
+                                                    
+                                                    // Create a new demo instance
                                                     let demo_instance = DemoInstance {
+                                                        // Add the steps
                                                         demo_steps,
+                                                        // Add the script identifier (unused again) 
                                                         script_identifier: sha256::digest(
                                                             script_instance.script.clone(),
                                                         ),
+                                                        // The name of the demo should be the scripts name
                                                         name: script_instance.name.clone(),
+                                                        // Load the date
                                                         created_at: current_date_time,
                                                     };
 
+                                                    // Load the demo into the list
                                                     self.demos.insert(demo_instance);
                                                 },
                                                 Err(err) => {
+                                                    // Display the error if there were any
                                                     self.toasts.lock().add(
                                                         Toast::new()
                                                             .kind(egui_toast::ToastKind::Error)
@@ -479,6 +503,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             //Reset Demo buffer state
                                             self.demo_buffer.set_state(DemoBufferState::None);
 
+                                            // Clear up anything created by the demo
                                             self.drawers.clear();
 
                                             //Load back the state
@@ -487,7 +512,8 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     });
                                 });
                             });
-
+                            
+                            // Return if we should keep the script
                             should_keep
                         });
                     });
