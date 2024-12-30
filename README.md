@@ -11,6 +11,7 @@
 
 ### Project Features
 - The project uses [lua](https://www.lua.org/) as its programming language, with [mlua](https://github.com/mlua-rs/mlua).
+- Callbacks are implemented in this Application to further customize user experience, and allow the implementation of more complicated projects.
 - You can import any library in your script, as the [lua](https://www.lua.org/) instance to support external libraries.
 - The drawings are rendered with the [Bevy game engine](https://bevyengine.org/), to ensure flexibility, safety and speed.
 - Ui components are created via [egui](https://crates.io/crates/egui).
@@ -18,7 +19,7 @@
   - Syntax highlighting is available in the Script Manager and the Command Panel.
 - The Command Panel has the user friendly interface with features to enhance production.
 - You can also save and open projects.
-- You can record demos and play them back step by step, so they can be explained thoroughly.
+- You can record demos and play them back step by step, so they can be explained thoroughly.z
 ### Drawing Capabilities
 - Create multiple drawers (with a unique ID).
 - Draw lines forward and backward.
