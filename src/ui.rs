@@ -8,14 +8,20 @@ use dashmap::{DashMap, DashSet};
 use egui_commonmark::{commonmark_str, CommonMarkCache};
 use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
 use serde::Deserialize;
-use std::{collections::{HashMap, VecDeque}, fs, path::PathBuf, sync::Arc};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawer, Drawers, LuaRuntime, ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION
+    DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime,
+    ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
 };
-use base64::{engine::general_purpose::URL_SAFE, prelude::BASE64_STANDARD, Engine as _};
+use base64::{prelude::BASE64_STANDARD, Engine as _};
 use bevy::prelude::Resource;
 use egui_tiles::Tiles;
 use egui_toast::{Toast, Toasts};
@@ -365,7 +371,8 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                         if ui.button("Create Demo").clicked() {
                                             //Store current drawers and canvas
-                                            let current_drawer_canvas = Drawers(Arc::new(DashMap::clone(&self.drawers.0)));
+                                            let current_drawer_canvas =
+                                                Drawers(Arc::new(DashMap::clone(&self.drawers.0)));
 
                                             self.drawers.clear();
 
@@ -414,14 +421,14 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             self.demo_buffer.set_state(DemoBufferState::None);
 
                                             self.drawers.clear();
-                                            //B&(02AMy4S)|7*RhIn*d&<_qdK*UB_4k)Q<mb7_pWOTswFyw?V8i%x@)nijBv0_2eCHxaaB7<8lAQ16eQq70q4J*glES2E90%Z?rg*Gd<4azjMAC3qEEfOX2>)pIxIj<WD@tLH7mhcdCaN@&Y6Xr*e2vUCYJiQu_VwA@Gp@rwueKaKe:R>t2kNfZLzfrUifWIb<|1)Sbmucc*1avpR3QrtU*hRsi?(ej?USfTJWoBuDZWk9VKmPnk)
+
                                             //Load back the state
                                             self.drawers.clone_from(&current_drawer_canvas);
                                         }
                                     });
                                 });
                             });
-                            
+
                             should_keep
                         });
                     });
