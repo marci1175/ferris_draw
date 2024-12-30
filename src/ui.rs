@@ -4,17 +4,16 @@ use bevy_egui::{
     EguiContexts,
 };
 use chrono::Local;
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use egui_commonmark::{commonmark_str, CommonMarkCache};
 use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
 use serde::Deserialize;
-use std::{collections::VecDeque, fs, path::PathBuf, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, fs, path::PathBuf, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime, ScriptLinePrompts,
-    DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
+    DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawer, Drawers, LuaRuntime, ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION
 };
 use base64::{engine::general_purpose::URL_SAFE, prelude::BASE64_STANDARD, Engine as _};
 use bevy::prelude::Resource;
@@ -366,7 +365,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                         if ui.button("Create Demo").clicked() {
                                             //Store current drawers and canvas
-                                            let current_drawer_canvas = self.drawers.clone();
+                                            let current_drawer_canvas = Drawers(Arc::new(DashMap::clone(&self.drawers.0)));
 
                                             self.drawers.clear();
 
@@ -414,13 +413,15 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             //Reset Demo buffer state
                                             self.demo_buffer.set_state(DemoBufferState::None);
 
+                                            self.drawers.clear();
+                                            //B&(02AMy4S)|7*RhIn*d&<_qdK*UB_4k)Q<mb7_pWOTswFyw?V8i%x@)nijBv0_2eCHxaaB7<8lAQ16eQq70q4J*glES2E90%Z?rg*Gd<4azjMAC3qEEfOX2>)pIxIj<WD@tLH7mhcdCaN@&Y6Xr*e2vUCYJiQu_VwA@Gp@rwueKaKe:R>t2kNfZLzfrUifWIb<|1)Sbmucc*1avpR3QrtU*hRsi?(ej?USfTJWoBuDZWk9VKmPnk)
                                             //Load back the state
-                                            self.drawers = current_drawer_canvas;
+                                            self.drawers.clone_from(&current_drawer_canvas);
                                         }
                                     });
                                 });
                             });
-
+                            
                             should_keep
                         });
                     });
@@ -513,7 +514,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                         let mut modified_demo: Option<DemoInstance> = None;
 
                         let mut should_remove = false;
-                        self.demos.iter().for_each(|demo| {
+                        for (idx, demo) in self.demos.iter().enumerate() {
                             let demo_name = demo.name.clone();
 
                             ui.horizontal(|ui| {
@@ -556,97 +557,106 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             }
                                             else {
                                                 // Reset state
+                                                //n1GYpHpfb&_E:an$nR&Ej
                                                 self.demo_buffer.set_state(DemoBufferState::None);
                                             }
                                         };
                                     },
                                 );
 
-                                ui.collapsing("Settings", |ui| {
-                                    if ui.button("Delete").clicked() {
-                                        //Indicate that we would like to remove this entry
-                                        should_remove = true;
-                                        modified_demo = Some(demo.clone());
-
-                                        //Insert the script into the rubbish bin
-                                        self.rubbish_bin.insert(RubbishBinItem::Demo(demo.clone()));
-                                    }
-
-                                    let rename_menu = ui.menu_button("Rename Demo", |ui| {
-                                        ui.text_edit_singleline(&mut *self.rename_buffer.lock());
-
-                                        if ui.button("Rename").clicked() {
-                                            //Set the variable so that we will know which entry to modify and re-insert
+                                ui.push_id(idx, |ui| {
+                                    ui.collapsing("Settings", |ui| {
+                                        if ui.button("Delete").clicked() {
+                                            //Indicate that we would like to remove this entry
+                                            should_remove = true;
                                             modified_demo = Some(demo.clone());
+
+                                            //Insert the script into the rubbish bin
+                                            self.rubbish_bin
+                                                .insert(RubbishBinItem::Demo(demo.clone()));
                                         }
-                                    });
 
-                                    if rename_menu.response.clicked() {
-                                        *self.rename_buffer.lock() = demo.name.clone();
-                                    }
+                                        let rename_menu = ui.menu_button("Rename Demo", |ui| {
+                                            ui.text_edit_singleline(
+                                                &mut *self.rename_buffer.lock(),
+                                            );
 
-                                    ui.menu_button("Export", |ui| {
-                                        if ui.button("As File").clicked() {
-                                            if let Some(path) = rfd::FileDialog::new()
-                                                .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
-                                                .save_file()
-                                            {
+                                            if ui.button("Rename").clicked() {
+                                                //Set the variable so that we will know which entry to modify and re-insert
+                                                modified_demo = Some(demo.clone());
+                                            }
+                                        });
+
+                                        if rename_menu.response.clicked() {
+                                            *self.rename_buffer.lock() = demo.name.clone();
+                                        }
+
+                                        ui.menu_button("Export", |ui| {
+                                            if ui.button("As File").clicked() {
+                                                if let Some(path) = rfd::FileDialog::new()
+                                                    .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
+                                                    .save_file()
+                                                {
+                                                    let compressed_data =
+                                                        miniz_oxide::deflate::compress_to_vec(
+                                                            &rmp_serde::to_vec(&demo).unwrap(),
+                                                            CompressionLevel::BestCompression as u8,
+                                                        );
+
+                                                    let _ = fs::write(path, compressed_data);
+                                                    ui.close_menu();
+                                                }
+                                            }
+
+                                            if ui.button("To Clipboard").clicked() {
                                                 let compressed_data =
                                                     miniz_oxide::deflate::compress_to_vec(
                                                         &rmp_serde::to_vec(&demo).unwrap(),
                                                         CompressionLevel::BestCompression as u8,
                                                     );
 
-                                                let _ = fs::write(path, compressed_data);
+                                                let base64_string =
+                                                    BASE64_STANDARD.encode(compressed_data);
+
+                                                ui.output_mut(|output| {
+                                                    output.copied_text = base64_string
+                                                });
+
                                                 ui.close_menu();
                                             }
-                                        }
-
-                                        if ui.button("To Clipboard").clicked() {
-                                            let compressed_data =
-                                                miniz_oxide::deflate::compress_to_vec(
-                                                    &rmp_serde::to_vec(&demo).unwrap(),
-                                                    CompressionLevel::BestCompression as u8,
-                                                );
-
-                                            let base64_string =
-                                                BASE64_STANDARD.encode(compressed_data);
-
-                                            ui.output_mut(|output| {
-                                                output.copied_text = base64_string
-                                            });
-
-                                            ui.close_menu();
-                                        }
-                                    });
-
-                                    ui.separator();
-
-                                    ui.menu_button("View raw Demo", |ui| {
-                                        ui.label("Raw demo");
+                                        });
 
                                         ui.separator();
 
-                                        ScrollArea::both().auto_shrink([false, false]).show(
-                                            ui,
-                                            |ui| {
-                                                for command in &demo.demo_steps {
-                                                    ui.label(command.to_string());
-                                                }
-                                            },
-                                        );
-                                    });
+                                        ui.menu_button("View raw Demo", |ui| {
+                                            ui.label("Raw demo");
 
-                                    ui.menu_button("Information", |ui| {
-                                        ui.label(format!(
-                                            "Created: {}",
-                                            demo.created_at.to_rfc3339()
-                                        ));
-                                        ui.label(format!("Total steps: {}", demo.demo_steps.len()));
+                                            ui.separator();
+
+                                            ScrollArea::both().auto_shrink([false, false]).show(
+                                                ui,
+                                                |ui| {
+                                                    for command in &demo.demo_steps {
+                                                        ui.label(command.to_string());
+                                                    }
+                                                },
+                                            );
+                                        });
+
+                                        ui.menu_button("Information", |ui| {
+                                            ui.label(format!(
+                                                "Created: {}",
+                                                demo.created_at.to_rfc3339()
+                                            ));
+                                            ui.label(format!(
+                                                "Total steps: {}",
+                                                demo.demo_steps.len()
+                                            ));
+                                        });
                                     });
                                 });
                             });
-                        });
+                        }
 
                         if let Some(mut demo) = modified_demo {
                             self.demos.remove(&demo);
@@ -1064,6 +1074,7 @@ pub fn main_ui(
         .get_state_if_eq(DemoBufferState::Playback)
     {
         Window::new("Playback Manager")
+            .collapsible(false)
             .fixed_pos(Pos2::new(
                 (ctx.screen_rect().width() - (entity_manager_width + 225.)) / 2.,
                 ctx.used_rect().height() - (command_panel_height + 140.),
@@ -1118,7 +1129,7 @@ pub fn main_ui(
                             ui.vertical(|ui| {
                                 ui.label(format!(
                                     "Current step ({}/{}):",
-                                    ui_state.demo_buffer.iter_idx,
+                                    ui_state.demo_buffer.iter_idx + 1,
                                     locked_buffer.len()
                                 ));
                                 ui.label(locked_buffer[ui_state.demo_buffer.iter_idx].to_string());
