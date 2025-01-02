@@ -5,27 +5,23 @@ edition = "2021"
 
 [dependencies]
 serde = {version = "1.0.215", features = ["derive"]}
-bevy = {version = "0.15", features = ["async-io", "serialize"]}
+bevy = {version = "0.15", default-features = true, features = ["serialize"]}
 bevy_egui = {version = "0.31", features = ["serde"]}
-mlua = {version = "0.10.2", features = ["luajit", "vendored", "async", "send"]}
-mlua-sys = {version = "0.6.6", features = ["luajit", "vendored"]}
 egui_tiles = "0.10.1"
-indexmap = {version = "2.7.0", features = ["serde"]}
-once_cell = "1.20.2"
-tokio = { version = "1.42.0", features = ["full"] }
 anyhow = "1.0.94"
 dashmap = {version = "6.1.0", features = ["serde"]}
 egui-toast = "0.15.0"
 rmp-serde = "1.3.0"
 miniz_oxide = "0.8.0"
-rfd = "0.15.1"
 egui_extras = {version = "0.29.1", features = ["all_loaders", "syntect"]}
 parking_lot = {version = "0.12.3", features = ["serde"]}
 geo = "0.29.3"
 egui_commonmark = {version = "0.18.0", features = ["better_syntax_highlighting", "macros"]}
-image = { version = "0.25", default-features = false, features = ["png"] }
-sha256 = "1.5.0"
 chrono = { version = "0.4.39", features = ["serde"] }
 typed_floats = {version = "1.0.2", features = ["serde"]}
 base64 = "0.22.1"
 strum = {version = "0.26.3", features = ["derive"]}
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+mlua = {version = "0.10.2", features = ["luajit", "vendored", "async", "send"]}
+rfd = "0.15.1"

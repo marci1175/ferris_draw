@@ -1,10 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use bevy::{
     asset::embedded_asset,
     math::Quat,
     prelude::PluginGroup,
     text::cosmic_text::Angle,
-    window::{Window, WindowPlugin},
+    window::{Window, WindowPlugin, WindowResizeConstraints, WindowResolution},
 };
 use std::{fs, path::PathBuf};
 // hide console window on Windows in release
@@ -19,10 +20,13 @@ use bevy::{
     DefaultPlugins,
 };
 use bevy_egui::EguiPlugin;
+
+#[cfg(not(target_family = "wasm"))]
+use ferris_draw::{init_lua_functions, lua_runtime::LuaRuntime};
+
 use ferris_draw::{
-    init_lua_functions,
     ui::{main_ui, UiState},
-    DrawRequester, DrawerMesh, Drawers, FilledPolygonPoints, LuaRuntime,
+    DrawRequester, DrawerMesh, Drawers, FilledPolygonPoints,
 };
 use miniz_oxide::deflate::CompressionLevel;
 
@@ -32,6 +36,7 @@ fn main()
 
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
+            fit_canvas_to_parent: true,
             title: "Ferris Draw".to_string(),
             ..Default::default()
         }),
@@ -40,13 +45,17 @@ fn main()
     .add_plugins(EguiPlugin)
     .init_resource::<UiState>()
     .init_resource::<Drawers>()
-    .init_resource::<LuaRuntime>()
     .init_resource::<DrawRequester>()
     .add_systems(Startup, setup)
     .add_systems(PreUpdate, clear_screen)
     .add_systems(Update, main_ui)
     .add_systems(Update, draw)
     .add_systems(Update, exit_handler);
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        app.init_resource::<LuaRuntime>();
+    }
 
     embedded_asset!(app, "../assets/ferris.png");
 
@@ -58,6 +67,8 @@ fn setup(
     drawers: Res<Drawers>,
     mut ui_state: ResMut<UiState>,
     draw_requested: Res<DrawRequester>,
+
+    #[cfg(not(target_family = "wasm"))]
     lua_runtime: ResMut<LuaRuntime>,
 )
 {
@@ -85,6 +96,8 @@ fn setup(
     let toast_handle = ui_state.toasts.clone();
     let demo_buffer_handle = ui_state.demo_buffer.clone();
 
+    // Lua function wont be initalized in a wasm environment as they wont be needed.
+    #[cfg(not(target_family = "wasm"))]
     init_lua_functions(
         lua_runtime,
         draw_requested,

@@ -7,7 +7,8 @@ use chrono::Local;
 use dashmap::DashMap;
 use egui_commonmark::{commonmark_str, CommonMarkCache};
 use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
-use mlua::Function;
+#[cfg(not(target_family = "wasm"))]
+use mlua::{Function, IntoLua};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, VecDeque},
@@ -19,9 +20,12 @@ use strum::IntoEnumIterator;
 
 use parking_lot::{Mutex, RwLock};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::LuaRuntime;
+
 use crate::{
-    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, LuaRuntime,
-    ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
+    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts,
+    DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
 };
 use base64::{prelude::BASE64_STANDARD, Engine as _};
 use bevy::prelude::Resource;
@@ -152,7 +156,7 @@ pub enum ManagerPane
     RubbishBin,
 }
 
-#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum RubbishBinItem
 {
     Script(ScriptInstance),
@@ -163,6 +167,8 @@ pub enum RubbishBinItem
 pub struct ManagerBehavior
 {
     /// The [`mlua::Lua`] runtime handle, this can be used to run code on.
+    /// This field is only enabled in non-wasm enviroments.
+    #[cfg(not(target_family = "wasm"))]
     lua_runtime: LuaRuntime,
 
     /// [`Toasts`] are used to display notifications to the user.
@@ -210,7 +216,9 @@ pub struct ScriptInstance
 
     /// The list of callback this script has.
     /// This field gets updated every script start
+    /// Callbacks are disabled in a wasm environment as the lua virtual machine is not available when compiled to WebAssembly.
     #[serde(skip)]
+    #[cfg(not(target_family = "wasm"))]
     pub callbacks: HashMap<CallbackType, Function>,
 }
 
@@ -223,6 +231,7 @@ impl ScriptInstance
             is_running: false,
             name,
             script,
+            #[cfg(not(target_family = "wasm"))]
             callbacks: HashMap::new(),
         }
     }
@@ -245,6 +254,10 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                 // Allocate ui for the script adding menu button
                 ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
+                    // Disable the ui if its in a wasm environment as all demos are pre programmed.
+                    #[cfg(target_family = "wasm")]
+                    ui.disable();
+
                     // Lock the name buffer so that it can be accessed later, without a deadlock
                     let name_buffer = &mut *self.name_buffer.lock();
 
@@ -287,6 +300,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                         ui.separator();
 
                         // Create import from file button
+                        #[cfg(not(target_family = "wasm"))]
                         if ui.button("Import from File").clicked() {
                             // If the user has selected a file patter match the path
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
@@ -353,35 +367,46 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             false => {
                                                 if ui.button("Run").clicked() {
                                                     script_instance.is_running = true;
-                                                    
-                                                    // Run the script
-                                                    // Pattern match an error and display it as a notification
-                                                    if let Err(err) = self
-                                                    .lua_runtime
-                                                    // Load the script as a string into the lua runtime
-                                                    .load(script_instance.script.to_string())
-                                                    // Execute the loaded string
-                                                    .exec()
+
+                                                    // Check if this is not the wasm build, as we can only enable the lua runtime in non-wasm environments
+                                                    #[cfg(not(target_family = "wasm"))]
                                                     {
-                                                        // Add the error into the toasts if it returned an error
-                                                        self.toasts.lock().add(
-                                                            Toast::new()
-                                                                .kind(egui_toast::ToastKind::Error)
-                                                                .text(err.to_string()),
-                                                        );
+                                                        // Run the script
+                                                        // Pattern match an error and display it as a notification
+                                                        if let Err(err) = self
+                                                        .lua_runtime
+                                                        // Load the script as a string into the lua runtime
+                                                        .load(script_instance.script.to_string())
+                                                        // Execute the loaded string
+                                                        .exec()
+                                                        {
+                                                            // Add the error into the toasts if it returned an error
+                                                            self.toasts.lock().add(
+                                                                Toast::new()
+                                                                    .kind(egui_toast::ToastKind::Error)
+                                                                    .text(err.to_string()),
+                                                            );
 
-                                                        script_instance.is_running = false;
-                                                        return;
-                                                    };
+                                                            script_instance.is_running = false;
+                                                            return;
+                                                        };
 
-                                                    for callback_type in CallbackType::iter() {
-                                                        if let Ok(function) = self.lua_runtime.globals().get::<Function>(callback_type.to_string()) {
-                                                            script_instance.callbacks.insert(callback_type, function);
+                                                        for callback_type in CallbackType::iter() {
+                                                            if let Ok(function) = self.lua_runtime.globals().get::<Function>(callback_type.to_string()) {
+                                                                script_instance.callbacks.insert(callback_type, function);
+                                                            }
+                                                        }
+
+                                                        // If there were no callbacks we can reset the state since nothing is getting called by the app at runtime
+                                                        if script_instance.callbacks.is_empty() {
+                                                            script_instance.is_running = false;
                                                         }
                                                     }
 
-                                                    // If there were no callbacks we can reset the state since nothing is getting called by the app at runtime
-                                                    if script_instance.callbacks.is_empty() {
+                                                    //Check if this is a wasm build, so that when the button is pressed it will play the written demo
+                                                    #[cfg(target_family = "wasm")]
+                                                    {
+
                                                         script_instance.is_running = false;
                                                     }
                                                 }
@@ -477,28 +502,38 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             *self.rename_buffer.lock() =
                                                 script_instance.name.clone();
                                         }
-
-                                        // Add the Export as File button
-                                        if ui.button("Export as File").clicked() {
-                                            // If the user has selected a place to save the file pattern match that path, otherwise dont do anything
-                                            if let Some(path) = rfd::FileDialog::new()
-                                                // Set the file's name in the file dialog
-                                                .set_file_name(script_instance.name.clone())
-                                                // Add a filter to the file extiension
-                                                .add_filter("Lua", &["lua"])
-                                                //Select the type of FileDialog
-                                                .save_file()
-                                            {
-                                                // Write the text to the path
-                                                fs::write(path, script_instance.script.clone())
-                                                    .unwrap();
+                                        
+                                        // Check if the target is not wasm as File exporting is not available in wasm 
+                                        #[cfg(not(target_family = "wasm"))] {
+                                            // Add the Export as File button
+                                            if ui.button("Export as File").clicked() {
+                                                // If the user has selected a place to save the file pattern match that path, otherwise dont do anything
+                                                if let Some(path) = rfd::FileDialog::new()
+                                                    // Set the file's name in the file dialog
+                                                    .set_file_name(script_instance.name.clone())
+                                                    // Add a filter to the file extiension
+                                                    .add_filter("Lua", &["lua"])
+                                                    //Select the type of FileDialog
+                                                    .save_file()
+                                                {
+                                                    // Write the text to the path
+                                                    fs::write(path, script_instance.script.clone())
+                                                        .unwrap();
+                                                }
                                             }
+                                        }
+                                        #[cfg(target_family = "wasm")] {
+                                            ui.add_enabled_ui(false, |ui| {
+                                                let _ = ui.button("Export as File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                                let _ = ui.button("Create Demo").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                            });
                                         }
 
                                         // Draw a separator
                                         ui.separator();
 
                                         // Add the Create demo button
+                                        #[cfg(not(target_family = "wasm"))]
                                         if ui.button("Create Demo").clicked() {
                                             //Store current drawers and canvas
                                             let current_drawer_canvas =
@@ -536,10 +571,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                     let demo_instance = DemoInstance {
                                                         // Add the steps
                                                         demo_steps,
-                                                        // Add the script identifier (unused again) 
-                                                        script_identifier: sha256::digest(
-                                                            script_instance.script.clone(),
-                                                        ),
                                                         // The name of the demo should be the scripts name
                                                         name: script_instance.name.clone(),
                                                         // Load the date
@@ -572,6 +603,12 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                             //Load back the state
                                             self.drawers.clone_from(&current_drawer_canvas);
+                                        }
+                                        
+                                        #[cfg(target_family = "wasm")] {
+                                            ui.add_enabled_ui(false, |ui| {
+                                                let _ = ui.button("Create Demo").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                            });
                                         }
                                     });
                                 });
@@ -614,24 +651,34 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                 ui.allocate_space(vec2(ui.available_width(), 2.));
 
                 ui.menu_button("Import Demo", |ui| {
-                    if ui.button("Import Demo from File").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
-                            .pick_file()
-                        {
-                            match read_compressed_file_into::<DemoInstance>(path) {
-                                Ok(save_file) => {
-                                    self.demos.lock().push(save_file);
-                                },
-                                Err(err) => {
-                                    self.toasts.lock().add(
-                                        Toast::new()
-                                            .kind(egui_toast::ToastKind::Error)
-                                            .text(format!("Demo runtime error: {err}")),
-                                    );
-                                },
-                            };
+                    // Check for the target family as file handling is not supported in WASM.
+                    #[cfg(not(target_family = "wasm"))] {
+                        //Create import demo button, this is not available in wasm.
+                        if ui.button("Import Demo from File").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
+                                .pick_file()
+                            {
+                                match read_compressed_file_into::<DemoInstance>(path) {
+                                    Ok(save_file) => {
+                                        self.demos.lock().push(save_file);
+                                    },
+                                    Err(err) => {
+                                        self.toasts.lock().add(
+                                            Toast::new()
+                                                .kind(egui_toast::ToastKind::Error)
+                                                .text(format!("Demo runtime error: {err}")),
+                                        );
+                                    },
+                                };
+                            }
                         }
+                    }
+                    #[cfg(target_family = "wasm")] {
+                        // Create placeholder button is wasm
+                        ui.add_enabled_ui(false, |ui| {
+                            let _ = ui.button("Import Demo from File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                        });
                     }
 
                     ui.separator();
@@ -677,10 +724,16 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                 ui.add_enabled_ui(
                                     self.demo_buffer.get_state() == DemoBufferState::None,
                                     |ui| {
+                                        // Disable the UI when compiled to wasm as playbacks don't work in wasm.
+                                        #[cfg(target_family = "wasm")]
+                                        ui.disable();
+                                    
                                         if ui.button("Playback").clicked() {
                                             //Clear environment
                                             self.drawers.clear();
-
+                                            
+                                            // Check if this is a wasm environent as playback are not enabled in the browser.
+                                            #[cfg(not(target_family = "wasm"))]
                                             // Check if the demo is empty
                                             if let Some(first_step) = demo.demo_steps.first() {
                                                 // Check if the first step is a valid function
@@ -712,7 +765,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             }
                                             else {
                                                 // Reset state
-                                                //n1GYpHpfb&_E:an$nR&Ej
                                                 self.demo_buffer.set_state(DemoBufferState::None);
                                             }
                                         };
@@ -746,21 +798,31 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         }
 
                                         ui.menu_button("Export", |ui| {
-                                            if ui.button("As File").clicked() {
-                                                if let Some(path) = rfd::FileDialog::new()
-                                                    .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
-                                                    .save_file()
-                                                {
-                                                    let compressed_data =
-                                                        miniz_oxide::deflate::compress_to_vec(
-                                                            &rmp_serde::to_vec(&demo).unwrap(),
-                                                            CompressionLevel::BestCompression as u8,
-                                                        );
-
-                                                    let _ = fs::write(path, compressed_data);
-                                                    ui.close_menu();
+                                            // Check for target family as File hadnling is not supported on wasm yet.
+                                            #[cfg(not(target_family = "wasm"))] {
+                                                // Create import as file button
+                                                if ui.button("As File").clicked() {
+                                                    if let Some(path) = rfd::FileDialog::new()
+                                                        .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
+                                                        .save_file()
+                                                    {
+                                                        let compressed_data =
+                                                            miniz_oxide::deflate::compress_to_vec(
+                                                                &rmp_serde::to_vec(&demo).unwrap(),
+                                                                CompressionLevel::BestCompression as u8,
+                                                            );
+    
+                                                        let _ = fs::write(path, compressed_data);
+                                                        ui.close_menu();
+                                                    }
                                                 }
                                             }
+                                            #[cfg(target_family = "wasm")] {
+                                                ui.add_enabled_ui(false, |ui| {
+                                                    let _ = ui.button("Export as File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                                });
+                                            }
+                                            
 
                                             if ui.button("To Clipboard").clicked() {
                                                 let compressed_data =
@@ -895,43 +957,27 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 pub fn main_ui(
     mut ui_state: ResMut<UiState>,
     mut contexts: EguiContexts<'_, '_>,
+    #[cfg(not(target_family = "wasm"))] 
     lua_runtime: ResMut<LuaRuntime>,
     drawers: Res<Drawers>,
 )
 {
     let ctx = contexts.ctx_mut();
 
+    // Call scripts with the `on_draw` callback
+
+    // Call scripts with the `on_input` callback
+    #[cfg(not(target_family = "wasm"))]
     ctx.input(|reader| {
         if reader.focused {
             let keys_down = reader.keys_down.clone();
+            let callback_type = CallbackType::OnInput;
+            let data = keys_down
+                .iter()
+                .enumerate()
+                .map(|(idx, key)| (idx, key.name().to_string()));
 
-            for script in ui_state.scripts.lock().iter_mut() {
-                // If the script is not running dont call its callbacks
-                if !script.is_running {
-                    continue;
-                }
-
-                // If the script has a registered OnInput callback we can invoke the function
-                if let Some(function) = script.callbacks.get(&CallbackType::OnInput) {
-                    let itered_keys = keys_down
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, key)| (idx, key.name().to_string()));
-
-                    if let Err(err) =
-                        function.call::<()>(lua_runtime.create_table_from(itered_keys))
-                    {
-                        // Add the error into the toasts if it returned an error
-                        ui_state.toasts.lock().add(
-                            Toast::new()
-                                .kind(egui_toast::ToastKind::Error)
-                                .text(err.to_string()),
-                        );
-
-                        script.is_running = false;
-                    };
-                };
-            }
+            invoke_callback_from_scripts(&ui_state, &lua_runtime, callback_type, Some(data));
         }
     });
 
@@ -956,6 +1002,7 @@ pub fn main_ui(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
+                    #[cfg(not(target_family = "wasm"))]
                     if ui.button("Save project").clicked() {
                         if let Some(save_path) = rfd::FileDialog::new()
                             .set_file_name("new_save")
@@ -977,6 +1024,7 @@ pub fn main_ui(
                         }
                     };
 
+                    #[cfg(not(target_family = "wasm"))]
                     if ui.button("Open project").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Open file", &[PROJECT_FILE_EXTENSION])
@@ -1003,6 +1051,12 @@ pub fn main_ui(
                             }
                         }
                     };
+
+                    #[cfg(target_family = "wasm")]
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.button("File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                        ui.button("Open project").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                    });
                 });
 
                 ui.menu_button("Toolbox", |ui| {
@@ -1034,6 +1088,7 @@ pub fn main_ui(
 
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {
+                        #[cfg(not(target_family = "wasm"))]
                         lua_runtime: lua_runtime.clone(),
                         toasts,
                         drawers: drawers.clone(),
@@ -1167,6 +1222,9 @@ pub fn main_ui(
                                                     command_line_buffer.clone(),
                                                 ),
                                             );
+
+                                            // Check if it has the "wasm" target family, as the lua runtime is not supported in wasm
+                                            #[cfg(not(target_family = "wasm"))]
                                             match lua_runtime
                                                 .load(command_line_buffer.clone())
                                                 .exec()
@@ -1247,6 +1305,8 @@ pub fn main_ui(
 
     let mut is_playbacker_open = true;
 
+    // Demo playbacks are not enabled in the wasm-environment
+    #[cfg(not(target_family = "wasm"))]
     if let Some(buffer) = ui_state
         .demo_buffer
         .clone()
@@ -1351,6 +1411,55 @@ pub fn main_ui(
 
         //Reset the demo buffer thus existing the demo mode
         ui_state.demo_buffer.clear();
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn invoke_callback_from_scripts<K, V>(
+    ui_state: &ResMut<'_, UiState>,
+    lua_runtime: &ResMut<'_, LuaRuntime>,
+    callback_type: CallbackType,
+    data: Option<impl IntoIterator<Item = (K, V)> + Clone>,
+) where
+    K: IntoLua,
+    V: IntoLua,
+{
+    for script in ui_state.scripts.lock().iter_mut() {
+        // If the script is not running dont call its callbacks
+        if !script.is_running {
+            continue;
+        }
+
+        // If the data is a Some that means that we want to invoke the callback with an argument passed in.
+        if let Some(ref data) = data {
+            if let Some(function) = script.callbacks.get(&callback_type) {
+                if let Err(err) = function.call::<()>(lua_runtime.create_table_from(data.clone())) {
+                    // Add the error into the toasts if it returned an error
+                    ui_state.toasts.lock().add(
+                        Toast::new()
+                            .kind(egui_toast::ToastKind::Error)
+                            .text(err.to_string()),
+                    );
+
+                    script.is_running = false;
+                };
+            };
+        }
+        // If the data is a None it means that the callback is to be invoked without arguments.
+        else {
+            if let Some(function) = script.callbacks.get(&callback_type) {
+                if let Err(err) = function.call::<()>(()) {
+                    // Add the error into the toasts if it returned an error
+                    ui_state.toasts.lock().add(
+                        Toast::new()
+                            .kind(egui_toast::ToastKind::Error)
+                            .text(err.to_string()),
+                    );
+
+                    script.is_running = false;
+                };
+            };
+        }
     }
 }
 

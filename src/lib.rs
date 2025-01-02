@@ -1,3 +1,5 @@
+#![warn(unused_crate_dependencies)]
+
 pub const DEMO_FILE_EXTENSION: &str = "demo";
 pub const PROJECT_FILE_EXTENSION: &str = "save";
 
@@ -23,7 +25,12 @@ use chrono::{DateTime, Local};
 use dashmap::DashMap;
 use egui_toast::{Toast, Toasts};
 use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
-use mlua::{Error, Function, Lua};
+
+#[cfg(not(target_family = "wasm"))]
+use lua_runtime::LuaRuntime;
+#[cfg(not(target_family = "wasm"))]
+use mlua::{Error, Function};
+
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use typed_floats::NonNaN;
@@ -100,17 +107,7 @@ pub struct DemoInstance
 {
     pub name: String,
     pub demo_steps: Vec<DemoStep>,
-    pub script_identifier: String,
     pub created_at: DateTime<Local>,
-}
-
-impl PartialEq for DemoInstance
-{
-    fn eq(&self, other: &Self) -> bool
-    {
-        sha256::digest(rmp_serde::to_vec(self).unwrap())
-            == sha256::digest(rmp_serde::to_vec(other).unwrap())
-    }
 }
 
 /// The items of this enum contain the functions a user can call on their turtles.
@@ -136,6 +133,7 @@ pub enum DemoStep
 
 impl DemoStep
 {
+    #[cfg(not(target_family = "wasm"))]
     pub fn execute_lua_function(&self, lua_rt: LuaRuntime) -> Result<(), Error>
     {
         lua_rt.load(self.to_string()).exec()
@@ -212,34 +210,41 @@ impl Default for DrawRequester
     }
 }
 
-#[derive(Resource, Clone)]
-pub struct LuaRuntime(pub Lua);
-
-impl Default for LuaRuntime
+#[cfg(not(target_family = "wasm"))]
+pub mod lua_runtime
 {
-    fn default() -> Self
+    use std::ops::{Deref, DerefMut};
+
+    use bevy::prelude::Resource;
+    use mlua::Lua;
+
+    #[derive(Resource, Clone)]
+    pub struct LuaRuntime(pub Lua);
+
+    impl Default for LuaRuntime
     {
-        Self(unsafe { Lua::unsafe_new() })
+        fn default() -> Self
+        {
+            Self(unsafe { Lua::unsafe_new() })
+        }
     }
-}
 
-/// Implement dereferencing for LuaRuntime so that I wouldnt have to call .0 everytime i want to access the inner value.
-impl Deref for LuaRuntime
-{
-    type Target = Lua;
-
-    fn deref(&self) -> &Self::Target
+    impl Deref for LuaRuntime
     {
-        &self.0
+        type Target = Lua;
+
+        fn deref(&self) -> &Self::Target
+        {
+            &self.0
+        }
     }
-}
 
-/// Implement dereferencing for LuaRuntime so that I wouldnt have to call .0 everytime i want to access the inner value.
-impl DerefMut for LuaRuntime
-{
-    fn deref_mut(&mut self) -> &mut Self::Target
+    impl DerefMut for LuaRuntime
     {
-        &mut self.0
+        fn deref_mut(&mut self) -> &mut Self::Target
+        {
+            &mut self.0
+        }
     }
 }
 
@@ -486,6 +491,7 @@ impl DerefMut for Drawers
 
 /// Create a valid* [`Lua`] runtime.
 /// This function automaticly adds all the functions to the global variables.
+#[cfg(not(target_family = "wasm"))]
 pub fn init_lua_functions(
     lua_rt: ResMut<LuaRuntime>,
     draw_requester: Res<DrawRequester>,
@@ -1069,7 +1075,7 @@ impl Display for CallbackType
         })
     }
 }
-
+#[cfg(not(target_family = "wasm"))]
 pub fn function_callback(argument: Option<String>, function: Function) -> anyhow::Result<()>
 {
     match argument {
