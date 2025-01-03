@@ -5,9 +5,13 @@ use bevy::{
     math::Quat,
     prelude::PluginGroup,
     text::cosmic_text::Angle,
-    window::{Window, WindowPlugin, WindowResizeConstraints, WindowResolution},
+    window::{Window, WindowPlugin},
 };
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+};
+
 // hide console window on Windows in release
 use bevy::{
     app::{App, AppExit, PreUpdate, Startup, Update},

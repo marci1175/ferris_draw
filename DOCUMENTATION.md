@@ -204,6 +204,8 @@ print("Hello world!")
 Callbacks allow the user to enhance their scripts. Mostly in ways, that could make a script interactive. Generally callbacks are functions which the Application calls at specific events, ie. user input.
 In Ferris draw there are a few callbacks the user can use to enhance their script's user experience.
 
+Scripts which contain callbacks cannot be edited while running. Scripts with callbacks can be shut down.
+
 1. **`on_draw()`**
    This callback is invoked every frame draw. This callback does not receive any arguments.
 2. **`on_input(keys)`**

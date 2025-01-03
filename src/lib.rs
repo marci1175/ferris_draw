@@ -306,7 +306,9 @@ impl From<LineStrip> for Mesh
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilledPolygonPoints
 {
+    /// The points of the polygon.
     pub points: Vec<Vec3>,
+    /// The color of the polygon.
     pub color: Color,
 }
 
@@ -427,7 +429,9 @@ pub struct Drawer
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Drawings
 {
+    /// The lines drawn by the drawer.
     pub lines: Vec<LineStrip>,
+    /// The polygons drawn by the drawer.
     pub polygons: Vec<FilledPolygonPoints>,
 }
 
@@ -1008,21 +1012,13 @@ pub fn init_lua_functions(
                     drawer.drawings.polygons.push(FilledPolygonPoints {
                         points: vec![
                             Vec3::new(current_position.x, current_position.y, 0.),
-                            Vec3::new(
-                                current_position.x + (desired_x),
-                                current_position.y,
-                                0.,
-                            ),
+                            Vec3::new(current_position.x + (desired_x), current_position.y, 0.),
                             Vec3::new(
                                 current_position.x + (desired_x),
                                 current_position.y + (desired_y),
                                 0.,
                             ),
-                            Vec3::new(
-                                current_position.x,
-                                current_position.y + (desired_y),
-                                0.,
-                            ),
+                            Vec3::new(current_position.x, current_position.y + (desired_y), 0.),
                         ],
                         color: current_color,
                     });

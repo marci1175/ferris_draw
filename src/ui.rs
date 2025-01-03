@@ -23,9 +23,13 @@ use parking_lot::{Mutex, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use crate::LuaRuntime;
 
+#[cfg(target_family = "wasm")]
+use crate::{Angle, FilledPolygonPoints, LineStrip, Drawer};
+#[cfg(target_family = "wasm")]
+use bevy::{color::Color, math::Vec3};
+
 use crate::{
-    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts,
-    DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
+    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION
 };
 use base64::{prelude::BASE64_STANDARD, Engine as _};
 use bevy::prelude::Resource;
@@ -150,18 +154,11 @@ impl Default for UiState
                     script_list.push(ScriptInstance::new(
                         String::from("rectangle"),
                         String::from(
-                            r#"
-if not exists("drawer1") then
+                            r#"if not exists("drawer1") then
     new("drawer1")
 end
 
 rectangle("drawer1", 100.0, 100.0)
-
-for i=0, 4, 1 do 
-    forward("drawer1", -100)
-    rotate("drawer1", 90)
-end
-
                     "#,
                         ),
                     ));
@@ -177,7 +174,10 @@ end
 for i=0, 360, 1 do
         forward("drawer1", 1)
         rotate("drawer1", 1)
-end"#,
+end
+
+rotate("drawer1", 10)
+"#,
                         ),
                     ));
                 }
@@ -396,6 +396,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     .auto_shrink([false, false])
                     // Show the Ui inside the Scroll Area
                     .show(ui, |ui| {
+                        // This indicates the current script's position in the list.
+                        let mut script_idx = 0;
+
                         // Iter over the scripts, and move them to the rubbish bin if the closure return false.
                         self.scripts.lock().retain_mut(|script_instance| {
                             // Define what we should do with this entry.
@@ -454,6 +457,58 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                     //Check if this is a wasm build, so that when the button is pressed it will play the written demo
                                                     #[cfg(target_family = "wasm")]
                                                     {
+                                                        // The first script will draw a rectangle.
+                                                        if script_idx == 0 {
+                                                            if self.drawers.get("drawer1").is_none() {
+                                                                self.drawers.insert(String::from("drawer1"), Drawer::default());
+                                                            }
+    
+                                                            if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
+                                                                drawer.drawings.polygons.push(FilledPolygonPoints {
+                                                                    points: vec![
+                                                                        Vec3::new(0., 0., 0.),
+                                                                        Vec3::new(
+                                                                            100.,
+                                                                            0.,
+                                                                            0.,
+                                                                        ),
+                                                                        Vec3::new(
+                                                                            100.,
+                                                                            100.,
+                                                                            0.,
+                                                                        ),
+                                                                        Vec3::new(
+                                                                            0.,
+                                                                            100.,
+                                                                            0.,
+                                                                        ),
+                                                                    ],
+                                                                    color: Color::WHITE,
+                                                                });
+                                                            }
+                                                            
+                                                        }
+                                                        // The second script will draw a circle and rotate the drawer with 10 degrees.
+                                                        else if script_idx == 1 {
+                                                            if self.drawers.get("drawer1").is_none() {
+                                                                self.drawers.insert(String::from("drawer1"), Drawer::default());
+                                                            }
+    
+                                                            if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
+                                                                let mut circle_positions = vec![(Vec3::default(), Color::WHITE)];
+    
+                                                                // `i` counts as the current angle
+                                                                for i in 0..360 {
+                                                                    let radians = (i as f32).to_radians();
+    
+                                                                    circle_positions.push((Vec3::new(circle_positions.last().unwrap().0.x + (1. * radians.cos()), circle_positions.last().unwrap().0.y + (1. * radians.sin()), 0.), Color::WHITE));
+                                                                }
+    
+                                                                drawer.drawings.lines.push(LineStrip::new(circle_positions));
+    
+                                                                drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + 10.);
+                                                            }
+                                                        }
 
                                                         script_instance.is_running = false;
                                                     }
@@ -500,6 +555,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
     
                                                 // Create a ScrollArea to be able to display / edit more text
                                                 ScrollArea::both().show(ui, |ui| {
+                                                    // If this is open in a wasm environment we should allow the modification of demos as they're pre programmed
+                                                    ui.disable();
+
                                                     // Add the text editor with the custom layouter to the ui
                                                     ui.add(
                                                         TextEdit::multiline(
@@ -576,7 +634,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                         #[cfg(target_family = "wasm")] {
                                             ui.add_enabled_ui(false, |ui| {
-                                                let _ = ui.button("Export as File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                                let _ = ui.button("Export as File").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                                             });
                                         }
 
@@ -658,13 +716,16 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         
                                         #[cfg(target_family = "wasm")] {
                                             ui.add_enabled_ui(false, |ui| {
-                                                let _ = ui.button("Create Demo").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                                let _ = ui.button("Create Demo").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                                             });
                                         }
                                     });
                                 });
                             });
                             
+                            // Increment script_idx
+                            script_idx += 1;
+
                             // Return if we should keep the script
                             should_keep
                         });
@@ -728,7 +789,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     #[cfg(target_family = "wasm")] {
                         // Create placeholder button is wasm
                         ui.add_enabled_ui(false, |ui| {
-                            let _ = ui.button("Import from File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                            let _ = ui.button("Import from File").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                         });
                     }
 
@@ -873,10 +934,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             }
                                             #[cfg(target_family = "wasm")] {
                                                 ui.add_enabled_ui(false, |ui| {
-                                                    let _ = ui.button("Export as File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                                                    let _ = ui.button("Export as File").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                                                 });
                                             }
-                                            
 
                                             if ui.button("To Clipboard").clicked() {
                                                 let compressed_data =
@@ -1107,11 +1167,11 @@ pub fn main_ui(
 
                     #[cfg(target_family = "wasm")]
                     ui.add_enabled_ui(false, |ui| {
-                        ui.button("File").on_hover_text(
+                        ui.button("File").on_disabled_hover_text(
                             RichText::from("File handling is not supported in WASM.")
                                 .color(Color32::RED),
                         );
-                        ui.button("Open project").on_hover_text(
+                        ui.button("Open project").on_disabled_hover_text(
                             RichText::from("File handling is not supported in WASM.")
                                 .color(Color32::RED),
                         );
@@ -1126,6 +1186,12 @@ pub fn main_ui(
                 if ui.button("Documentation").clicked() {
                     ui_state.documentation_window = !ui_state.documentation_window;
                 }
+
+                #[cfg(target_family = "wasm")]
+                ui.hyperlink_to(
+                    "Get the full Desktop Version!",
+                    "https://github.com/marci1175/ferris_draw/releases",
+                )
             });
         });
 
@@ -1251,29 +1317,45 @@ pub fn main_ui(
                                     .desired_width(ui.available_size_before_wrap().x)
                                     .hint_text(RichText::from({
                                         if is_buffer_state_none {
-                                            "Enter a command..."
+                                            "Enter a command"
                                         }
                                         else {
                                             "Command line is disabled while replaying a Demo."
                                         }
                                     }).italics()),
-                            );
+                                );
 
                                 // If the underlying text was changed reset the command line input index to 0.
                                 if text_edit.changed() {
                                     ui_state.command_line_input_index = 0;
                                 }
-
                                 // Only take keyobard inputs, when the text editor has focus.
                                 if text_edit.has_focus() {
                                     if enter_was_pressed {
                                         let command_line_buffer =
                                             ui_state.command_line_buffer.clone();
 
+                                        // If the wipe() function is called in wasm we should do the cleaning up here.
+                                        #[cfg(target_family = "wasm")]
+                                        {
+                                            use crate::Drawings;
+
+                                            if command_line_buffer == "wipe()" {
+                                                for mut drawer in drawers.iter_mut() {
+                                                    drawer.drawings = Drawings::default();
+                                                }
+                                                
+                                                return;
+                                            }
+                                        }
+
                                         if command_line_buffer == "cls"
                                             || command_line_buffer == "clear"
                                         {
                                             ui_state.command_line_outputs.write().clear();
+                                        }
+                                        else if command_line_buffer == "?" || command_line_buffer == "help" {
+                                            ui_state.documentation_window = true;
                                         }
                                         else {
                                             ui_state.command_line_outputs.write().push(
@@ -1295,6 +1377,10 @@ pub fn main_ui(
                                                     );
                                                 },
                                             }
+                                            
+                                            ui_state.command_line_outputs.write().push(
+                                                ScriptLinePrompts::Error(String::from("Demo only has a few functionalites available: `wipe()`, `clear`, `cls`, `?`, `help`."))
+                                            );
                                         }
 
                                         if !command_line_buffer.is_empty() {
@@ -1331,28 +1417,29 @@ pub fn main_ui(
                                     }
 
                                     if down_was_pressed {
-                                        if ui_state.command_line_input_index
-                                            == ui_state.command_line_inputs.len()
-                                        {
-                                            ui_state.command_line_buffer = ui_state
-                                                .command_line_inputs
-                                                [ui_state.command_line_input_index - 2]
-                                                .clone();
-                                            ui_state.command_line_input_index -= 2;
-                                        }
-                                        else if ui_state.command_line_input_index > 0 {
-                                            ui_state.command_line_input_index -= 1;
+                                            if ui_state.command_line_input_index
+                                                == ui_state.command_line_inputs.len()
+                                            {
+                                                ui_state.command_line_buffer = ui_state
+                                                    .command_line_inputs
+                                                    [ui_state.command_line_input_index - 2]
+                                                    .clone();
+                                                ui_state.command_line_input_index -= 2;
+                                            }
+                                            else if ui_state.command_line_input_index > 0 {
+                                                ui_state.command_line_input_index -= 1;
 
-                                            ui_state.command_line_buffer = ui_state
-                                                .command_line_inputs
-                                                [ui_state.command_line_input_index]
-                                                .clone();
+                                                ui_state.command_line_buffer = ui_state
+                                                    .command_line_inputs
+                                                    [ui_state.command_line_input_index]
+                                                    .clone();
+                                            }
+                                            else {
+                                                ui_state.command_line_buffer.clear();
+                                            }
                                         }
-                                        else {
-                                            ui_state.command_line_buffer.clear();
-                                        }
-                                    }
                                 }
+                                text_edit.on_hover_text("Enter ? or help to get more information.");
                             });
                         });
                     });
@@ -1363,7 +1450,7 @@ pub fn main_ui(
     }
 
     let mut is_playbacker_open = true;
-    
+
     // Demo playbacks are not enabled in the wasm-environment
     #[cfg(not(target_family = "wasm"))]
     if let Some(buffer) = ui_state
@@ -1505,18 +1592,16 @@ fn invoke_callback_from_scripts<K, V>(
             };
         }
         // If the data is a None it means that the callback is to be invoked without arguments.
-        else {
-            if let Some(function) = script.callbacks.get(&callback_type) {
-                if let Err(err) = function.call::<()>(()) {
-                    // Add the error into the toasts if it returned an error
-                    ui_state.toasts.lock().add(
-                        Toast::new()
-                            .kind(egui_toast::ToastKind::Error)
-                            .text(err.to_string()),
-                    );
+        else if let Some(function) = script.callbacks.get(&callback_type) {
+            if let Err(err) = function.call::<()>(()) {
+                // Add the error into the toasts if it returned an error
+                ui_state.toasts.lock().add(
+                    Toast::new()
+                        .kind(egui_toast::ToastKind::Error)
+                        .text(err.to_string()),
+                );
 
-                    script.is_running = false;
-                };
+                script.is_running = false;
             };
         }
     }
