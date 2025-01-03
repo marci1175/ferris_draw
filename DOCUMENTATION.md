@@ -7,6 +7,7 @@
   - [Utility functions](#utility-functions)
   - [Graphical functions](#graphical-functions)
   - [Interacting with the user](#interacting-with-the-user)
+  - [Callbacks](#callbacks)
 
 Examples will be show thorughout the documentation to help the reader.
 
@@ -185,7 +186,7 @@ Currently the user can only receive output from the script, however user input m
 
 **Example code showcasing all of the ways of communicating with the user.**
 
-```rs
+```lua
 notification(1, "Hello world!")
 notification(2, "Hello world!")
 notification(3, "Hello world!")
@@ -197,3 +198,54 @@ print("Hello world!")
 ![notification_showcase](assets/documentation/notification_showcase.png)
 
 ![console_print](assets/documentation/console_print.png)
+
+### Callbacks
+
+Callbacks allow the user to enhance their scripts. Mostly in ways, that could make a script interactive. Generally callbacks are functions which the Application calls at specific events, ie. user input.
+In Ferris draw there are a few callbacks the user can use to enhance their script's user experience.
+
+1. **`on_draw()`**
+   This callback is invoked every frame draw. This callback does not receive any arguments.
+2. **`on_input(keys)`**
+   This callback is invoked every user button press. And the list of the current buttons pressed is passed in as an argument.
+3. **`on_param_change()`** (Currently unused.)
+   This callback is invoked when any of the script's paramaters change.
+
+**Example code showcasing `on_input(keys)`**
+
+```lua
+-- Check if the drawer already exists, if not spawn one
+if not exists("asd") then
+   new("asd")
+end
+
+-- Create a callback
+function on_input(keys)
+   -- Check for the user's pressed buttons
+   for key, value in pairs(keys) do
+      --If "W" is pressed move the drawer forward 1 unit.
+      if value == "W" then
+         forward("asd", 1)
+      end
+
+      --If "A" is pressed rotate the drawer left.
+      if value == "A" then
+         rotate("asd", 1)
+      end
+
+      --If "D" is pressed rotate the drawer right.
+      if value == "D" then
+         rotate("asd", -1)
+      end
+
+      --If "S" is pressed move the drawer backward 1 unit.
+      if value == "S" then
+         forward("asd", -1)
+      end
+   end
+end
+```
+
+![callback_showcase](assets/documentation/callback_test.png)
+
+This allows the user to control the drawer.

@@ -68,8 +68,7 @@ fn setup(
     mut ui_state: ResMut<UiState>,
     draw_requested: Res<DrawRequester>,
 
-    #[cfg(not(target_family = "wasm"))]
-    lua_runtime: ResMut<LuaRuntime>,
+    #[cfg(not(target_family = "wasm"))] lua_runtime: ResMut<LuaRuntime>,
 )
 {
     //Load in save

@@ -1009,18 +1009,18 @@ pub fn init_lua_functions(
                         points: vec![
                             Vec3::new(current_position.x, current_position.y, 0.),
                             Vec3::new(
-                                current_position.x + (desired_x - current_position.x),
+                                current_position.x + (desired_x),
                                 current_position.y,
                                 0.,
                             ),
                             Vec3::new(
-                                current_position.x + (desired_x - current_position.x),
-                                current_position.y + (desired_y - current_position.y),
+                                current_position.x + (desired_x),
+                                current_position.y + (desired_y),
                                 0.,
                             ),
                             Vec3::new(
                                 current_position.x,
-                                current_position.y + (desired_y - current_position.y),
+                                current_position.y + (desired_y),
                                 0.,
                             ),
                         ],

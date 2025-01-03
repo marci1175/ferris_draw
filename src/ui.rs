@@ -110,8 +110,14 @@ impl Default for UiState
     fn default() -> Self
     {
         Self {
-            command_panel: false,
-            manager_panel: false,
+            command_panel: {
+                // If we are targetting the wasm platform these panels should be automaticly enabled
+                cfg!(target_family = "wasm")
+            },
+            manager_panel: {
+                // If we are targetting the wasm platform these panels should be automaticly enabled
+                cfg!(target_family = "wasm")
+            },
             item_manager: {
                 let mut tiles = Tiles::default();
                 let tileids = vec![
@@ -135,7 +141,49 @@ impl Default for UiState
             documentation_window: false,
             demos: Arc::new(Mutex::new(vec![])),
             demo_buffer: DemoBuffer::new(vec![]),
-            scripts: Arc::new(Mutex::new(vec![])),
+            scripts: {
+                let mut script_list = vec![];
+
+                // In the wasm-environment we should automaticly be adding pre-set demos
+                if cfg!(target_family = "wasm") {
+                    //Rectangle script
+                    script_list.push(ScriptInstance::new(
+                        String::from("rectangle"),
+                        String::from(
+                            r#"
+if not exists("drawer1") then
+    new("drawer1")
+end
+
+rectangle("drawer1", 100.0, 100.0)
+
+for i=0, 4, 1 do 
+    forward("drawer1", -100)
+    rotate("drawer1", 90)
+end
+
+                    "#,
+                        ),
+                    ));
+
+                    //Circle
+                    script_list.push(ScriptInstance::new(
+                        String::from("circle"),
+                        String::from(
+                            r#"if not exists("drawer1") then
+    new("drawer1")
+end
+                    
+for i=0, 360, 1 do
+        forward("drawer1", 1)
+        rotate("drawer1", 1)
+end"#,
+                        ),
+                    ));
+                }
+
+                Arc::new(Mutex::new(script_list))
+            },
             demo_rename_text_buffer: Arc::new(Mutex::new(String::new())),
         }
     }
@@ -467,16 +515,19 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             });
                                         });
 
+                                        
                                         // Add the delete button so that the script can be deleted
-                                        if ui.button("Delete").clicked() {
-                                            // Flag the script as to be deleted
-                                            should_keep = false;
-
-                                            //Insert the script into the rubbish bin
-                                            self.rubbish_bin.lock().push(RubbishBinItem::Script(
-                                                script_instance.clone(),
-                                            ));
-                                        }
+                                        ui.add_enabled_ui(!cfg!(target_family = "wasm"), |ui| {
+                                            if ui.button("Delete").clicked() {
+                                                // Flag the script as to be deleted
+                                                should_keep = false;
+    
+                                                //Insert the script into the rubbish bin
+                                                self.rubbish_bin.lock().push(RubbishBinItem::Script(
+                                                    script_instance.clone(),
+                                                ));
+                                            }
+                                        });
 
                                         // Display the rename menu button
                                         let rename_menu = ui.menu_button("Rename Script", |ui| {
@@ -522,10 +573,10 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                 }
                                             }
                                         }
+
                                         #[cfg(target_family = "wasm")] {
                                             ui.add_enabled_ui(false, |ui| {
                                                 let _ = ui.button("Export as File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
-                                                let _ = ui.button("Create Demo").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                                             });
                                         }
 
@@ -654,7 +705,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     // Check for the target family as file handling is not supported in WASM.
                     #[cfg(not(target_family = "wasm"))] {
                         //Create import demo button, this is not available in wasm.
-                        if ui.button("Import Demo from File").clicked() {
+                        if ui.button("Import from File").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
                                 .add_filter("Demo File", &[DEMO_FILE_EXTENSION])
                                 .pick_file()
@@ -677,7 +728,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                     #[cfg(target_family = "wasm")] {
                         // Create placeholder button is wasm
                         ui.add_enabled_ui(false, |ui| {
-                            let _ = ui.button("Import Demo from File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                            let _ = ui.button("Import from File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                         });
                     }
 
@@ -685,24 +736,27 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                     ui.menu_button("Import from Text", |ui| {
                         ui.horizontal(|ui| {
-                            if ui.button("Import").clicked() {
-                                match BASE64_STANDARD.decode(self.demo_rename_text_buffer.lock().to_string()) {
-                                    Ok(bytes) => {
-                                        let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
-                                        
-                                        let demo_instance = deserialize_bytes_into::<DemoInstance>(decompressed_bytes).unwrap();
+                            // We only enabled importing from text in the desktop mode.
+                            ui.add_enabled_ui(!cfg!(target_family = "wasm"), |ui| {
+                                if ui.button("Import").clicked() {
+                                    match BASE64_STANDARD.decode(self.demo_rename_text_buffer.lock().to_string()) {
+                                        Ok(bytes) => {
+                                            let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
+                                            
+                                            let demo_instance = deserialize_bytes_into::<DemoInstance>(decompressed_bytes).unwrap();
+        
+                                            self.demos.lock().push(demo_instance);
     
-                                        self.demos.lock().push(demo_instance);
-
-                                        ui.close_menu();
-                                    },
-                                    Err(_err) => {
-                                        self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text("Text copied from clipboard does not contain any DemoInstances."));
-                                    },
+                                            ui.close_menu();
+                                        },
+                                        Err(_err) => {
+                                            self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text("Text copied from clipboard does not contain any DemoInstances."));
+                                        },
+                                    }
+    
+                                    self.demo_rename_text_buffer.lock().clear();
                                 }
-
-                                self.demo_rename_text_buffer.lock().clear();
-                            }
+                            });
 
                             ui.text_edit_singleline(&mut *self.demo_rename_text_buffer.lock());
                         });
@@ -957,8 +1011,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 pub fn main_ui(
     mut ui_state: ResMut<UiState>,
     mut contexts: EguiContexts<'_, '_>,
-    #[cfg(not(target_family = "wasm"))] 
-    lua_runtime: ResMut<LuaRuntime>,
+    #[cfg(not(target_family = "wasm"))] lua_runtime: ResMut<LuaRuntime>,
     drawers: Res<Drawers>,
 )
 {
@@ -1054,8 +1107,14 @@ pub fn main_ui(
 
                     #[cfg(target_family = "wasm")]
                     ui.add_enabled_ui(false, |ui| {
-                        ui.button("File").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
-                        ui.button("Open project").on_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
+                        ui.button("File").on_hover_text(
+                            RichText::from("File handling is not supported in WASM.")
+                                .color(Color32::RED),
+                        );
+                        ui.button("Open project").on_hover_text(
+                            RichText::from("File handling is not supported in WASM.")
+                                .color(Color32::RED),
+                        );
                     });
                 });
 
@@ -1304,7 +1363,7 @@ pub fn main_ui(
     }
 
     let mut is_playbacker_open = true;
-
+    
     // Demo playbacks are not enabled in the wasm-environment
     #[cfg(not(target_family = "wasm"))]
     if let Some(buffer) = ui_state
