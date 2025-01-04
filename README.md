@@ -30,5 +30,8 @@
 Documentation is available [here](https://github.com/marci1175/ferris_draw/blob/master/DOCUMENTATION.md#introduction).
 
 ### Project showcase
-**The application is subject to change, this video depicts the first release**
-https://youtu.be/NcGhhBk8_k4
+**An online demo is available for the application**
+https://marci1175.github.io/ferris_draw/
+
+**The application is subject to change, this video depicts the second release**
+https://youtu.be/pN9JmLXmT9c
