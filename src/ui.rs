@@ -26,7 +26,7 @@ use crate::LuaRuntime;
 #[cfg(target_family = "wasm")]
 use crate::{Angle, FilledPolygonPoints, LineStrip, Drawer};
 #[cfg(target_family = "wasm")]
-use bevy::{color::Color, math::Vec3};
+use bevy::{color::Color, math::{Vec3, Vec2}};
 
 use crate::{
     CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION
@@ -158,6 +158,8 @@ impl Default for UiState
     new("drawer1")
 end
 
+center("drawer1")
+
 rectangle("drawer1", 100.0, 100.0)
                     "#,
                         ),
@@ -172,14 +174,23 @@ rectangle("drawer1", 100.0, 100.0)
 end
                     
 for i=0, 360, 1 do
-        forward("drawer1", 1)
-        rotate("drawer1", 1)
+    forward("drawer1", 1)
+    rotate("drawer1", 1)
 end
 
 rotate("drawer1", 10)
 "#,
                         ),
                     ));
+                    //Line
+                    script_list.push(ScriptInstance::new(String::from("line"), String::from(
+                        r#"if not exists("drawer1") then
+    new("drawer1")
+end
+
+forward("drawer1", 100)
+                        "#
+                    )));
                 }
 
                 Arc::new(Mutex::new(script_list))
@@ -464,6 +475,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                             }
     
                                                             if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
+                                                                drawer.ang = Angle::from_degrees(90.);
+                                                                drawer.pos = Vec2::default();
+
                                                                 drawer.drawings.polygons.push(FilledPolygonPoints {
                                                                     points: vec![
                                                                         Vec3::new(0., 0., 0.),
@@ -495,10 +509,10 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                             }
     
                                                             if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
-                                                                let mut circle_positions = vec![(Vec3::default(), Color::WHITE)];
+                                                                let mut circle_positions = vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)];
     
                                                                 // `i` counts as the current angle
-                                                                for i in 0..360 {
+                                                                for i in drawer.ang.to_degrees() as i32..drawer.ang.to_degrees() as i32 + 360 {
                                                                     let radians = (i as f32).to_radians();
     
                                                                     circle_positions.push((Vec3::new(circle_positions.last().unwrap().0.x + (1. * radians.cos()), circle_positions.last().unwrap().0.y + (1. * radians.sin()), 0.), Color::WHITE));
@@ -509,7 +523,29 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                                 drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + 10.);
                                                             }
                                                         }
+                                                        else if script_idx == 2 {
+                                                            if self.drawers.get("drawer1").is_none() {
+                                                                self.drawers.insert(String::from("drawer1"), Drawer::default());
+                                                            }
+    
+                                                            if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
+                                                                let angle_rad = drawer.ang.to_radians();
+                                                                let origin = drawer.pos;
 
+                                                                // Forward units
+                                                                let amount_forward = 100.;
+
+                                                                // The new x.
+                                                                let x = origin.x
+                                                                    + (amount_forward * angle_rad.cos());
+                                                                // The new y.
+                                                                let y = origin.y
+                                                                    + (amount_forward * angle_rad.sin());
+
+                                                                drawer.pos = Vec2::new(x, y);
+                                                                drawer.drawings.lines.push(LineStrip::new(vec![(Vec3::new(origin.x, origin.y, 0.), Color::WHITE), (Vec3::new(x, y, 0.), Color::WHITE)]))
+                                                            }
+                                                        }
                                                         script_instance.is_running = false;
                                                     }
                                                 }
@@ -522,7 +558,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         }
                                     },
                                 );
-
+                                
                                 // Create a new ui part with a different id to avoid id collisions
                                 ui.push_id(script_instance.name.clone(), |ui| {
                                     // Create the settings collapsing button
