@@ -25,3 +25,6 @@ strum = {version = "0.26.3", features = ["derive"]}
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 mlua = {version = "0.10.2", features = ["luajit", "vendored", "async", "send"]}
 rfd = "0.15.1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+piccolo = "0.3.3"
