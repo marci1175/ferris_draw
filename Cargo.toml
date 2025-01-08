@@ -21,10 +21,10 @@ chrono = { version = "0.4.39", features = ["serde"] }
 typed_floats = {version = "1.0.2", features = ["serde"]}
 base64 = "0.22.1"
 strum = {version = "0.26.3", features = ["derive"]}
+piccolo = "0.3.3"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 mlua = {version = "0.10.2", features = ["luajit", "vendored", "async", "send"]}
 rfd = "0.15.1"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-piccolo = "0.3.3"

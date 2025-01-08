@@ -26,7 +26,7 @@ use bevy::{
 use bevy_egui::EguiPlugin;
 
 #[cfg(not(target_family = "wasm"))]
-use ferris_draw::{init_lua_functions, lua_runtime::LuaRuntime};
+use ferris_draw::{init_lua_functions, LuaRuntime};
 
 use ferris_draw::{
     ui::{main_ui, UiState},
@@ -56,10 +56,7 @@ fn main()
     .add_systems(Update, draw)
     .add_systems(Update, exit_handler);
 
-    #[cfg(not(target_family = "wasm"))]
-    {
-        app.init_resource::<LuaRuntime>();
-    }
+    app.init_resource::<LuaRuntime>();
 
     embedded_asset!(app, "../assets/ferris.png");
 

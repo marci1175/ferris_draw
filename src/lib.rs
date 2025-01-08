@@ -10,6 +10,7 @@ use bevy::{
     prelude::{Component, Mesh, Res, ResMut, Resource},
     render::mesh::PrimitiveTopology,
 };
+use piccolo::{error::LuaError, Callback, RuntimeError, Value};
 use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
@@ -26,8 +27,6 @@ use dashmap::DashMap;
 use egui_toast::{Toast, Toasts};
 use geo::{coord, point, Contains, ConvexHull, Coord, LineString, Polygon};
 
-#[cfg(not(target_family = "wasm"))]
-use lua_runtime::LuaRuntime;
 #[cfg(not(target_family = "wasm"))]
 use mlua::{Error, Function};
 
@@ -210,43 +209,55 @@ impl Default for DrawRequester
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-pub mod lua_runtime
+#[derive(Resource, Clone)]
+pub struct LuaRuntime (
+    #[cfg(not(target_family = "wasm"))]
+    pub mlua::Lua,
+
+    #[cfg(target_family = "wasm")]
+    pub piccolo::Lua,
+);
+
+impl Default for LuaRuntime
 {
-    use std::ops::{Deref, DerefMut};
-
-    use bevy::prelude::Resource;
-    use mlua::Lua;
-
-    #[derive(Resource, Clone)]
-    pub struct LuaRuntime(pub Lua);
-
-    impl Default for LuaRuntime
+    fn default() -> Self
     {
-        fn default() -> Self
-        {
-            Self(unsafe { Lua::unsafe_new() })
-        }
-    }
+        #[cfg(not(target_family = "wasm"))]
+        return Self(unsafe {  mlua::Lua::unsafe_new() });
 
-    impl Deref for LuaRuntime
-    {
-        type Target = Lua;
-
-        fn deref(&self) -> &Self::Target
+        #[cfg(target_family = "wasm")]
         {
-            &self.0
-        }
-    }
+            let mut piccolo_lua = piccolo::Lua::core();
 
-    impl DerefMut for LuaRuntime
-    {
-        fn deref_mut(&mut self) -> &mut Self::Target
-        {
-            &mut self.0
+            piccolo_lua.load_io();
+
+            return Self(piccolo_lua);
         }
     }
 }
+
+impl Deref for LuaRuntime
+{
+    #[cfg(not(target_family = "wasm"))]
+    type Target =  mlua::Lua;
+
+    #[cfg(target_family = "wasm")]
+    type Target = piccolo::Lua;
+
+    fn deref(&self) -> &Self::Target
+    {
+        &self.0
+    }
+}
+
+impl DerefMut for LuaRuntime
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
+        &mut self.0
+    }
+}
+
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum ScriptLinePrompts
@@ -1050,6 +1061,569 @@ pub fn init_lua_functions(
     lua_vm.globals().set("notification", notification).unwrap();
     lua_vm.globals().set("position", position).unwrap();
     lua_vm.globals().set("rectangle", rectangle).unwrap();
+}
+
+// #[cfg(target_family = "wasm")]
+pub fn init_lua_functions_wasm(
+    lua_rt: piccolo::Lua,
+    draw_requester: Res<DrawRequester>,
+    drawers_handle: Drawers,
+    output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+    demo_buffer: DemoBuffer<Vec<DemoStep>>,
+    toast_handle: Arc<Mutex<Toasts>>,
+)
+{
+    lua_rt.enter(|ctx| {
+        let demo_buffer_handle = demo_buffer.clone();
+        let print = Callback::from_fn(&ctx, |a, b, c| {
+            let arg_value = c.get(0);
+
+            if arg_value.is_nil() {
+                let msg = arg_value.to_string();
+
+                if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                    buffer.write().push(DemoStep::Print(msg));
+    
+                    return Ok(piccolo::CallbackReturn::Return);
+                }
+    
+                output_list.write().push(ScriptLinePrompts::Standard(msg));
+
+                Ok(piccolo::CallbackReturn::Return)
+            }
+            else {
+                return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
+            }
+        });
+
+        let drawers_clone = drawers_handle.clone();
+        let demo_buffer_handle = demo_buffer.clone();
+
+        // Creates a new drawer with the Drawer handle, from a unique handle.
+        let new = Callback::from_fn(&ctx, |_, _, stack| {
+            let arg_value = stack.get(0);
+
+            if !arg_value.is_nil() {
+                let id = arg_value.to_string();
+
+                if !drawers_clone.contains_key(&id) {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::New(id.clone()));
+                    }
+        
+                    drawers_clone.insert(id.clone(), Drawer::default());
+
+                    return Ok(piccolo::CallbackReturn::Return);
+                }
+                else {
+                    return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                }
+            }
+            else {
+                return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
+            }
+        });
+
+        let rotate_drawer = Callback::from_fn(&ctx, |_, _, stack| {
+            let args = (stack.pop_front(), stack.pop_front());
+
+            if args.0.is_nil() || args.1.is_nil() {
+                return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
+            }
+
+            // Get params
+            let (id, degrees) = (args.0.to_string(), args.1.to_number().ok_or_else(|| piccolo::Error::Runtime(anyhow::Error::msg("Invalid degree argument.").into()))? as f32);
+
+            // Clone the drawers' list handle
+            let drawer_handle = drawers_clone.get_mut(&id);
+
+            match drawer_handle {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Rotate(
+                            id,
+                            NonNaN::<f32>::new(degrees).unwrap_or_default(),
+                        ));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    // Set the drawer's angle.
+                    drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + degrees);
+                },
+                None => {
+                    // Return the error
+                    return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());;
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        });
+    });
+
+    todo!();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    // Sets the drawer's angle.
+    let rotate_drawer = lua_vm
+        .create_function(move |_, params: (String, f32)| {
+            
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    // Resets the drawers position and angle.
+    let center = lua_vm
+        .create_function(move |_, id: String| {
+            // Fetich the drawer's handle.
+            let drawer_handle = drawers_clone.get_mut(&id);
+
+            match drawer_handle {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Center(id));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    //Reset the drawer's position.
+                    drawer.pos = Vec2::default();
+
+                    let drawer_color = drawer.color;
+
+                    //Add the reseted pos to the drawer
+                    drawer.drawings.lines.push(LineStrip {
+                        points: vec![(Vec3::default(), drawer_color)],
+                    });
+
+                    //Reset the drawer's angle.
+                    drawer.ang = Angle::from_degrees(90.);
+                },
+                None => {
+                     return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    // Sets the color of the drawing
+    let color = lua_vm
+        .create_function(move |_, params: (String, f32, f32, f32, f32)| {
+            // Get params
+            let (id, red, green, blue, alpha) = params;
+
+            // Fetich the drawer's handle.
+            let drawer_handle = drawers_clone.get_mut(&id);
+
+            match drawer_handle {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Color(
+                            id,
+                            NonNaN::<f32>::new(red).unwrap_or_default(),
+                            NonNaN::<f32>::new(green).unwrap_or_default(),
+                            NonNaN::<f32>::new(blue).unwrap_or_default(),
+                            NonNaN::<f32>::new(alpha).unwrap_or_default(),
+                        ));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    // Set the drawer's color
+                    drawer.color = Color::linear_rgba(red, green, blue, alpha);
+                },
+                None => {
+                    // Return the error
+                     return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    // Moves the drawer forward by a set amount of units, this makes the drawer draw too.
+    let forward = lua_vm
+        .create_function(move |_, params: (String, f32)| {
+            // Get params
+            let (id, amount) = params;
+
+            // Fetich the drawer's handle.
+            let drawer_handle = drawers_clone.get_mut(&id);
+
+            match drawer_handle {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Forward(
+                            id,
+                            NonNaN::<f32>::new(amount).unwrap_or_default(),
+                        ));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    // Calculate the difference on the y and x coordinate from its angle.
+                    // Get origin
+                    let origin = drawer.pos;
+
+                    //Clone the color so we can move it into the lines' list.
+                    let drawer_color = drawer.color;
+
+                    // Degrees into radians.
+                    let angle_rad = drawer.ang.to_radians();
+
+                    // Forward units
+                    let amount_forward = amount;
+
+                    // The new x.
+                    let x = origin.x
+                        + (amount_forward * floating_point_calculation_error(angle_rad.cos()));
+                    // The new y.
+                    let y = origin.y
+                        + (amount_forward * floating_point_calculation_error(angle_rad.sin()));
+
+                    //Store the new position and the drawer's color if it is enabled
+                    if drawer.enabled {
+                        drawer
+                            .drawings
+                            .lines
+                            .last_mut()
+                            .unwrap()
+                            .points
+                            .push((Vec3::new(x, y, 0.), drawer_color));
+                    }
+
+                    //Set the new drawers position.
+                    drawer.pos = Vec2::new(x, y);
+                },
+                None => {
+                    //Reset the drawer's position
+                    return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let wipe = lua_vm
+        .create_function(move |_, _: ()| {
+            if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                buffer.write().push(DemoStep::Wipe);
+
+                return Ok(piccolo::CallbackReturn::Return);
+            }
+
+            for mut drawer in drawers_clone.iter_mut() {
+                let drawer = drawer.value_mut();
+
+                let mut default_drawings = Drawings::default();
+                default_drawings.lines.push(LineStrip {
+                    points: vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)],
+                });
+                drawer.drawings = default_drawings;
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let exists = lua_vm
+        .create_function(move |_, id: String| Ok(drawers_clone.contains_key(&id)))
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let remove = lua_vm
+        .create_function(move |_, id: String| {
+            if drawers_clone.remove(&id).is_none() {
+                return Err(Error::RuntimeError(format!(
+                    r#"The drawer with handle "{id}" doesn't exist."#
+                )));
+            }
+
+            if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                buffer.write().push(DemoStep::Remove(id));
+
+                return Ok(piccolo::CallbackReturn::Return);
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let drawers = lua_vm
+        .create_function(move |_, _: ()| {
+            let mut names = Vec::new();
+
+            for drawer in drawers_clone.iter() {
+                names.push(drawer.key().clone());
+            }
+
+            Ok(names)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let enable = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Enable(id));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    drawer.enabled = true;
+
+                    let tuple = (Vec3::new(drawer.pos.x, drawer.pos.y, 0.), drawer.color);
+
+                    drawer.drawings.lines.push(LineStrip::new(vec![tuple]));
+                },
+                None => {
+                     return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let disable = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Disable(id));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    drawer.enabled = false;
+                },
+                None => {
+                     return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let draw_request_sender = draw_requester.sender.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let fill = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get(&id) {
+                Some(selected_drawer) => {
+                    if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
+                        buffer.write().push(DemoStep::Fill(id));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    let drawer_lines: Vec<Vec3> = drawers_clone
+                        .iter()
+                        .flat_map(|pair| {
+                            let drawer = pair.value();
+
+                            drawer.drawings.clone().lines.iter().flat_map(|line_strip| {
+                                line_strip.points.iter().map(|points| points.0).collect::<Vec<Vec3>>()
+                            }).collect::<Vec<Vec3>>()
+                        })
+                        .collect();
+
+                    let mut lines: Vec<Line> = vec![];
+
+                    for positions in dbg!(drawer_lines).windows(2) {
+                        let (min, max) = (positions[0], positions[1]);
+
+                        lines.push(Line::new(min, max));
+                    }
+
+                    let mut checked_lines: Vec<Line> = vec![];
+
+                    for (idx, line) in lines.iter().enumerate() {
+                        for (current_checked_idx, checked_line) in checked_lines.iter().enumerate() {
+                            if idx as isize - 1 != current_checked_idx as isize && checked_lines.len() > 2 {
+                                if let Some(intersection_pos) = line.intersects(checked_line) {
+                                    let intersected_line_idx = checked_lines.iter().position(|line| line == checked_line).unwrap();
+                                    let mut polygon_points: Vec<Coord> = vec![];
+
+                                    polygon_points.push(coord!{x: intersection_pos.x as f64, y: intersection_pos.y as f64});
+
+                                    for poly_line in &checked_lines[intersected_line_idx + 1..idx] {
+                                        polygon_points.push(coord! {x: poly_line.max.x as f64, y: poly_line.max.y as f64});
+                                    }
+
+                                    let polygon = Polygon::new(LineString::new(polygon_points.clone()), vec![]);
+
+                                    let poly_convex_hull = polygon.convex_hull();
+
+                                    if poly_convex_hull.contains(&point!(x: selected_drawer.pos.x as f64, y: selected_drawer.pos.y as f64)) {
+                                        draw_request_sender.send((polygon_points.iter().map(|coord| Vec3::new(coord.x as f32, coord.y as f32, 0.)).collect::<Vec<Vec3>>(), selected_drawer.color, id.clone())).unwrap();
+                                    }
+
+                                    break;
+                                }
+                            }
+                        }
+
+                        checked_lines.push(line.clone());
+                    }
+                },
+                None => {
+                    return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let toasts_handle = toast_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let notification = lua_vm
+        .create_function(move |_, params: (u32, String)| {
+            if demo_buffer_handle.get_state() == DemoBufferState::Record {
+                return Ok(piccolo::CallbackReturn::Return);
+            }
+
+            let (notification_type, text) = params;
+
+            let toast = Toast::new();
+
+            let toast = match notification_type {
+                1 => toast.kind(egui_toast::ToastKind::Info),
+                2 => toast.kind(egui_toast::ToastKind::Success),
+                3 => toast.kind(egui_toast::ToastKind::Error),
+                4 => toast.kind(egui_toast::ToastKind::Warning),
+                _ => toast.kind(egui_toast::ToastKind::Custom(notification_type)),
+            }
+            .text(text);
+
+            toasts_handle.lock().add(toast);
+
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+
+    let position = lua_vm
+        .create_function(move |_, id: String| {
+            match drawers_clone.get(&id) {
+                Some(drawer) => Ok((drawer.pos.x, drawer.pos.y)),
+                None => {
+                     return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());
+                },
+            }
+        })
+        .unwrap();
+
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let rectangle = lua_vm
+        .create_function(move |_, params: (String, f32, f32)| {
+            let (id, desired_x, desired_y) = params;
+
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Rectangle(
+                            id,
+                            NonNaN::<f32>::new(desired_x).unwrap_or_default(),
+                            NonNaN::<f32>::new(desired_y).unwrap_or_default(),
+                        ));
+
+                        return Ok(piccolo::CallbackReturn::Return);
+                    }
+
+                    let current_position = drawer.pos;
+
+                    let current_color = drawer.color;
+                    drawer.drawings.polygons.push(FilledPolygonPoints {
+                        points: vec![
+                            Vec3::new(current_position.x, current_position.y, 0.),
+                            Vec3::new(current_position.x + (desired_x), current_position.y, 0.),
+                            Vec3::new(
+                                current_position.x + (desired_x),
+                                current_position.y + (desired_y),
+                                0.,
+                            ),
+                            Vec3::new(current_position.x, current_position.y + (desired_y), 0.),
+                        ],
+                        color: current_color,
+                    });
+                },
+                None => {
+                    return Err(anyhow::Error::msg(format!(r#"The drawer with handle "{id}" already exists."#)).into());;
+                },
+            }
+            Ok(piccolo::CallbackReturn::Return)
+        })
+        .unwrap();
+
+    //Set all the functions in the global handle of the lua runtime
+    // lua_vm.globals().set("new", new).unwrap();
+    // lua_vm.globals().set("remove", remove).unwrap();
+    // lua_vm.globals().set("drawers", drawers).unwrap();
+    // lua_vm.globals().set("rotate", rotate_drawer).unwrap();
+    // lua_vm.globals().set("forward", forward).unwrap();
+    // lua_vm.globals().set("center", center).unwrap();
+    // lua_vm.globals().set("color", color).unwrap();
+    // lua_vm.globals().set("print", print).unwrap();
+    // lua_vm.globals().set("wipe", wipe).unwrap();
+    // lua_vm.globals().set("exists", exists).unwrap();
+    // lua_vm.globals().set("enable", enable).unwrap();
+    // lua_vm.globals().set("disable", disable).unwrap();
+    // lua_vm.globals().set("fill", fill).unwrap();
+    // lua_vm.globals().set("notification", notification).unwrap();
+    // lua_vm.globals().set("position", position).unwrap();
+    // lua_vm.globals().set("rectangle", rectangle).unwrap();
 }
 
 #[derive(EnumIter, EnumCount, Clone, Copy, PartialEq, Eq, Hash)]
