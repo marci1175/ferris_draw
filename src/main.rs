@@ -7,10 +7,7 @@ use bevy::{
     text::cosmic_text::Angle,
     window::{Window, WindowPlugin},
 };
-use std::{
-    fs,
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
 
 // hide console window on Windows in release
 use bevy::{
@@ -99,6 +96,16 @@ fn setup(
     // Lua function wont be initalized in a wasm environment as they wont be needed.
     #[cfg(not(target_family = "wasm"))]
     init_lua_functions(
+        lua_runtime,
+        draw_requested,
+        drawers.clone(),
+        ui_state.command_line_outputs.clone(),
+        demo_buffer_handle,
+        toast_handle,
+    );
+
+    #[cfg(target_family = "wasm")]
+    init_lua_functions_wasm(
         lua_runtime,
         draw_requested,
         drawers.clone(),

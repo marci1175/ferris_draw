@@ -24,12 +24,16 @@ use parking_lot::{Mutex, RwLock};
 use crate::LuaRuntime;
 
 #[cfg(target_family = "wasm")]
-use crate::{Angle, FilledPolygonPoints, LineStrip, Drawer};
+use crate::{Angle, Drawer, FilledPolygonPoints, LineStrip};
 #[cfg(target_family = "wasm")]
-use bevy::{color::Color, math::{Vec3, Vec2}};
+use bevy::{
+    color::Color,
+    math::{Vec2, Vec3},
+};
 
 use crate::{
-    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts, DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION
+    CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts,
+    DEMO_FILE_EXTENSION, PROJECT_FILE_EXTENSION,
 };
 use base64::{prelude::BASE64_STANDARD, Engine as _};
 use bevy::prelude::Resource;
@@ -183,14 +187,17 @@ rotate("drawer1", 10)
                         ),
                     ));
                     //Line
-                    script_list.push(ScriptInstance::new(String::from("line"), String::from(
-                        r#"if not exists("drawer1") then
+                    script_list.push(ScriptInstance::new(
+                        String::from("line"),
+                        String::from(
+                            r#"if not exists("drawer1") then
     new("drawer1")
 end
 
 forward("drawer1", 100)
-                        "#
-                    )));
+                        "#,
+                        ),
+                    ));
                 }
 
                 Arc::new(Mutex::new(script_list))
