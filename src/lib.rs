@@ -10,6 +10,7 @@ use bevy::{
     prelude::{Component, Mesh, Res, ResMut, Resource},
     render::mesh::PrimitiveTopology,
 };
+use fragile::Fragile;
 use piccolo::{error::LuaError, Callback, RuntimeError, Value};
 use std::{
     fmt::Display,
@@ -212,7 +213,7 @@ impl Default for DrawRequester
 #[derive(Resource, Clone)]
 pub struct LuaRuntime(
     #[cfg(not(target_family = "wasm"))] pub mlua::Lua,
-    #[cfg(target_family = "wasm")] pub Arc<Mutex<piccolo::Lua>>,
+    #[cfg(target_family = "wasm")] pub Arc<Fragile<Mutex<piccolo::Lua>>>,
 );
 
 impl Default for LuaRuntime
@@ -228,8 +229,35 @@ impl Default for LuaRuntime
 
             piccolo_lua.load_io();
 
-            return Self(Arc::new(Mutex::new(piccolo_lua)));
+            return Self(Arc::new(Fragile::new(Mutex::new(piccolo_lua))));
         }
+    }
+}
+
+impl LuaRuntime {
+    pub fn execute_code(&self, code: &str) -> anyhow::Result<()> {
+        #[cfg(not(target_family = "wasm"))]
+        self.load(code).exec()?;
+
+        #[cfg(target_family = "wasm")]
+        {
+            use piccolo::{Closure, Executor};
+
+            let mut lua = self.get().lock();
+            let executor = lua.enter(|ctx| {
+                let closure = Closure::load(ctx, None, code.as_bytes()).unwrap();
+        
+                ctx.stash(Executor::start(
+                    ctx,
+                    piccolo::Function::Closure(closure),
+                    (),
+                ))
+            });
+        
+            lua.execute::<()>(&executor)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -239,7 +267,7 @@ impl Deref for LuaRuntime
     type Target = mlua::Lua;
 
     #[cfg(target_family = "wasm")]
-    type Target = piccolo::Lua;
+    type Target = Arc<Fragile<Mutex<piccolo::Lua>>>;
 
     fn deref(&self) -> &Self::Target
     {
@@ -1070,7 +1098,8 @@ pub fn init_lua_functions_wasm(
     toast_handle: Arc<Mutex<Toasts>>,
 )
 {
-    let lua_rt = lua_rt.lock();
+    let lua_rt_locked = lua_rt.get();
+    let mut lua_rt: &mut piccolo::Lua = &mut *lua_rt_locked.lock();
     
     lua_rt.enter(|ctx| {
         let demo_buffer_handle = demo_buffer.clone();

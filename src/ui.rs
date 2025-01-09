@@ -20,7 +20,6 @@ use strum::IntoEnumIterator;
 
 use parking_lot::{Mutex, RwLock};
 
-#[cfg(not(target_family = "wasm"))]
 use crate::LuaRuntime;
 
 #[cfg(target_family = "wasm")]
@@ -1114,7 +1113,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 pub fn main_ui(
     mut ui_state: ResMut<UiState>,
     mut contexts: EguiContexts<'_, '_>,
-    #[cfg(not(target_family = "wasm"))] lua_runtime: ResMut<LuaRuntime>,
+    lua_runtime: ResMut<LuaRuntime>,
     drawers: Res<Drawers>,
 )
 {
@@ -1378,20 +1377,6 @@ pub fn main_ui(
                                         let command_line_buffer =
                                             ui_state.command_line_buffer.clone();
 
-                                        // If the wipe() function is called in wasm we should do the cleaning up here.
-                                        #[cfg(target_family = "wasm")]
-                                        {
-                                            use crate::Drawings;
-
-                                            if command_line_buffer == "wipe()" {
-                                                for mut drawer in drawers.iter_mut() {
-                                                    drawer.drawings = Drawings::default();
-                                                }
-                                                
-                                                return;
-                                            }
-                                        }
-
                                         if command_line_buffer == "cls"
                                             || command_line_buffer == "clear"
                                         {
@@ -1408,10 +1393,8 @@ pub fn main_ui(
                                             );
 
                                             // Check if it has the "wasm" target family, as the lua runtime is not supported in wasm
-                                            #[cfg(not(target_family = "wasm"))]
                                             match lua_runtime
-                                                .load(command_line_buffer.clone())
-                                                .exec()
+                                                .execute_code(&command_line_buffer)
                                             {
                                                 Ok(_output) => (),
                                                 Err(_err) => {
@@ -1420,10 +1403,6 @@ pub fn main_ui(
                                                     );
                                                 },
                                             }
-                                            
-                                            ui_state.command_line_outputs.write().push(
-                                                ScriptLinePrompts::Error(String::from("Demo only has a few functionalites available: `wipe()`, `clear`, `cls`, `?`, `help`."))
-                                            );
                                         }
 
                                         if !command_line_buffer.is_empty() {

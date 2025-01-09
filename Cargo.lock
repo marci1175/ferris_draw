@@ -2491,6 +2491,7 @@ dependencies = [
  "egui_commonmark",
  "egui_extras",
  "egui_tiles",
+ "fragile",
  "geo",
  "miniz_oxide",
  "mlua",
@@ -2616,6 +2617,12 @@ checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
 ]
+
+[[package]]
+name = "fragile"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c2141d6d6c8512188a7891b4b01590a45f6dac67afb4f255c4124dbb86d4eaa"
 
 [[package]]
 name = "futures-channel"

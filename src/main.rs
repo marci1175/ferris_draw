@@ -22,8 +22,13 @@ use bevy::{
 };
 use bevy_egui::EguiPlugin;
 
+use ferris_draw::LuaRuntime;
+
 #[cfg(not(target_family = "wasm"))]
-use ferris_draw::{init_lua_functions, LuaRuntime};
+use ferris_draw::init_lua_functions;
+
+#[cfg(target_family = "wasm")]
+use ferris_draw::init_lua_functions_wasm;
 
 use ferris_draw::{
     ui::{main_ui, UiState},
@@ -65,8 +70,7 @@ fn setup(
     drawers: Res<Drawers>,
     mut ui_state: ResMut<UiState>,
     draw_requested: Res<DrawRequester>,
-
-    #[cfg(not(target_family = "wasm"))] lua_runtime: ResMut<LuaRuntime>,
+    lua_runtime: ResMut<LuaRuntime>,
 )
 {
     //Load in save

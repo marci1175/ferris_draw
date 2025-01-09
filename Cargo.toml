@@ -22,6 +22,7 @@ typed_floats = {version = "1.0.2", features = ["serde"]}
 base64 = "0.22.1"
 strum = {version = "0.26.3", features = ["derive"]}
 piccolo = "0.3.3"
+fragile = "2.0.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 mlua = {version = "0.10.2", features = ["luajit", "vendored", "async", "send"]}
