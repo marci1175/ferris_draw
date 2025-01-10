@@ -10,8 +10,12 @@ use bevy::{
     prelude::{Component, Mesh, Res, ResMut, Resource},
     render::mesh::PrimitiveTopology,
 };
+
+#[cfg(target_family = "wasm")]
 use fragile::Fragile;
+#[cfg(target_family = "wasm")]
 use piccolo::{error::LuaError, Callback, RuntimeError, Value};
+
 use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
@@ -133,10 +137,9 @@ pub enum DemoStep
 
 impl DemoStep
 {
-    #[cfg(not(target_family = "wasm"))]
-    pub fn execute_lua_function(&self, lua_rt: LuaRuntime) -> Result<(), Error>
+    pub fn execute_lua_function(&self, lua_rt: LuaRuntime) -> anyhow::Result<()>
     {
-        lua_rt.load(self.to_string()).exec()
+        lua_rt.execute_code(&self.to_string())
     }
 }
 
@@ -234,8 +237,10 @@ impl Default for LuaRuntime
     }
 }
 
-impl LuaRuntime {
-    pub fn execute_code(&self, code: &str) -> anyhow::Result<()> {
+impl LuaRuntime
+{
+    pub fn execute_code(&self, code: &str) -> anyhow::Result<()>
+    {
         #[cfg(not(target_family = "wasm"))]
         self.load(code).exec()?;
 
@@ -246,14 +251,14 @@ impl LuaRuntime {
             let mut lua = self.get().lock();
             let executor = lua.enter(|ctx| {
                 let closure = Closure::load(ctx, None, code.as_bytes()).unwrap();
-        
+
                 ctx.stash(Executor::start(
                     ctx,
                     piccolo::Function::Closure(closure),
                     (),
                 ))
             });
-        
+
             lua.execute::<()>(&executor)?;
         }
 
@@ -1100,7 +1105,7 @@ pub fn init_lua_functions_wasm(
 {
     let lua_rt_locked = lua_rt.get();
     let mut lua_rt: &mut piccolo::Lua = &mut *lua_rt_locked.lock();
-    
+
     lua_rt.enter(|ctx| {
         let demo_buffer_handle = demo_buffer.clone();
         let print = Callback::from_fn(&ctx, move |_, _, stack| {

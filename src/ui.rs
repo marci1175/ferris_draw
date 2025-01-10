@@ -6,9 +6,12 @@ use bevy_egui::{
 use chrono::Local;
 use dashmap::DashMap;
 use egui_commonmark::{commonmark_str, CommonMarkCache};
+use fragile::Fragile;
 use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
+
 #[cfg(not(target_family = "wasm"))]
 use mlua::{Function, IntoLua};
+
 use serde::Deserialize;
 use std::{
     collections::{HashMap, VecDeque},
@@ -22,6 +25,8 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::LuaRuntime;
 
+#[cfg(target_family = "wasm")]
+use piccolo::{Function, Value};
 #[cfg(target_family = "wasm")]
 use crate::{Angle, Drawer, FilledPolygonPoints, LineStrip};
 #[cfg(target_family = "wasm")]
@@ -117,14 +122,8 @@ impl Default for UiState
     fn default() -> Self
     {
         Self {
-            command_panel: {
-                // If we are targetting the wasm platform these panels should be automaticly enabled
-                cfg!(target_family = "wasm")
-            },
-            manager_panel: {
-                // If we are targetting the wasm platform these panels should be automaticly enabled
-                cfg!(target_family = "wasm")
-            },
+            command_panel: true,
+            manager_panel: true,
             item_manager: {
                 let mut tiles = Tiles::default();
                 let tileids = vec![
@@ -148,59 +147,7 @@ impl Default for UiState
             documentation_window: false,
             demos: Arc::new(Mutex::new(vec![])),
             demo_buffer: DemoBuffer::new(vec![]),
-            scripts: {
-                let mut script_list = vec![];
-
-                // In the wasm-environment we should automaticly be adding pre-set demos
-                if cfg!(target_family = "wasm") {
-                    //Rectangle script
-                    script_list.push(ScriptInstance::new(
-                        String::from("rectangle"),
-                        String::from(
-                            r#"if not exists("drawer1") then
-    new("drawer1")
-end
-
-center("drawer1")
-
-rectangle("drawer1", 100.0, 100.0)
-                    "#,
-                        ),
-                    ));
-
-                    //Circle
-                    script_list.push(ScriptInstance::new(
-                        String::from("circle"),
-                        String::from(
-                            r#"if not exists("drawer1") then
-    new("drawer1")
-end
-                    
-for i=0, 360, 1 do
-    forward("drawer1", 1)
-    rotate("drawer1", 1)
-end
-
-rotate("drawer1", 10)
-"#,
-                        ),
-                    ));
-                    //Line
-                    script_list.push(ScriptInstance::new(
-                        String::from("line"),
-                        String::from(
-                            r#"if not exists("drawer1") then
-    new("drawer1")
-end
-
-forward("drawer1", 100)
-                        "#,
-                        ),
-                    ));
-                }
-
-                Arc::new(Mutex::new(script_list))
-            },
+            scripts: Arc::new(Mutex::new(vec![])),
             demo_rename_text_buffer: Arc::new(Mutex::new(String::new())),
         }
     }
@@ -233,7 +180,6 @@ pub struct ManagerBehavior
 {
     /// The [`mlua::Lua`] runtime handle, this can be used to run code on.
     /// This field is only enabled in non-wasm enviroments.
-    #[cfg(not(target_family = "wasm"))]
     lua_runtime: LuaRuntime,
 
     /// [`Toasts`] are used to display notifications to the user.
@@ -262,8 +208,8 @@ pub struct ManagerBehavior
     /// The list of scripts the project contains.
     scripts: Arc<Mutex<Vec<ScriptInstance>>>,
 
-    /// The demos' rename text buffer.
-    demo_rename_text_buffer: Arc<Mutex<String>>,
+    /// This is where the users pastes the contents of their clipboard in order to import it.
+    import_from_clipboard_buffer: Arc<Mutex<String>>,
 }
 
 /// A [`ScriptInstance`] holds information about one script.
@@ -285,6 +231,10 @@ pub struct ScriptInstance
     #[serde(skip)]
     #[cfg(not(target_family = "wasm"))]
     pub callbacks: HashMap<CallbackType, Function>,
+
+    #[serde(skip)]
+    #[cfg(target_family = "wasm")]
+    pub callbacks: HashMap<CallbackType, Fragile<piccolo::Function<'static>>>,
 }
 
 impl ScriptInstance
@@ -296,7 +246,6 @@ impl ScriptInstance
             is_running: false,
             name,
             script,
-            #[cfg(not(target_family = "wasm"))]
             callbacks: HashMap::new(),
         }
     }
@@ -319,10 +268,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                 // Allocate ui for the script adding menu button
                 ui.allocate_ui(vec2(ui.available_width(), ui.min_size().y), |ui| {
-                    // Disable the ui if its in a wasm environment as all demos are pre programmed.
-                    #[cfg(target_family = "wasm")]
-                    ui.disable();
-
                     // Lock the name buffer so that it can be accessed later, without a deadlock
                     let name_buffer = &mut *self.name_buffer.lock();
 
@@ -366,7 +311,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                         // Create import from file button
                         #[cfg(not(target_family = "wasm"))]
-                        if ui.button("Import from File").clicked() {
+                        if ui.button("from File").clicked() {
                             // If the user has selected a file patter match the path
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
                                 // Pattern math reading a String out from it
@@ -398,6 +343,35 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                     },
                                 }
                             }
+                        }
+                        
+                        let clipboard_menu = ui.menu_button("from Clipboard", |ui| {
+                            // Lock buffer so that we can write to it
+                            let buffer = &mut *self.import_from_clipboard_buffer.lock();
+
+                            ui.horizontal(|ui| {
+                                if ui.button("Import").clicked() {
+                                    match import_from_clipboard::<ScriptInstance>(ui, buffer.to_string()) {
+                                        Ok(script_instance) => {
+                                            self.scripts.lock().push(script_instance);
+                                        },
+                                        Err(_err) => {
+                                            self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Text copied from clipboard does not contain a valid `DemoInstance`: {_err}")));
+                                        },
+                                    }
+
+                                    buffer.clear();
+                                    ui.close_menu();
+                                };
+
+                                ui.text_edit_singleline(buffer);
+                            });                            
+                        });
+
+                        // If the import from clipboard menu was opened the demo rename buffer should automaticly cleared 
+                        if clipboard_menu.response.clicked() {
+                            // Clear buffer
+                            self.import_from_clipboard_buffer.lock().clear();
                         }
                     });
                 });
@@ -436,122 +410,44 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                 if ui.button("Run").clicked() {
                                                     script_instance.is_running = true;
 
-                                                    // Check if this is not the wasm build, as we can only enable the lua runtime in non-wasm environments
-                                                    #[cfg(not(target_family = "wasm"))]
+                                                    // Run the script
+                                                    // Pattern match an error and display it as a notification
+                                                    if let Err(err) = self
+                                                    .lua_runtime
+                                                    // Load the script as a string into the lua runtime
+                                                    .execute_code(&script_instance.script)
                                                     {
-                                                        // Run the script
-                                                        // Pattern match an error and display it as a notification
-                                                        if let Err(err) = self
-                                                        .lua_runtime
-                                                        // Load the script as a string into the lua runtime
-                                                        .load(script_instance.script.to_string())
-                                                        // Execute the loaded string
-                                                        .exec()
-                                                        {
-                                                            // Add the error into the toasts if it returned an error
-                                                            self.toasts.lock().add(
-                                                                Toast::new()
-                                                                    .kind(egui_toast::ToastKind::Error)
-                                                                    .text(err.to_string()),
-                                                            );
+                                                        // Add the error into the toasts if it returned an error
+                                                        self.toasts.lock().add(
+                                                            Toast::new()
+                                                                .kind(egui_toast::ToastKind::Error)
+                                                                .text(err.to_string()),
+                                                        );
 
-                                                            script_instance.is_running = false;
-                                                            return;
-                                                        };
+                                                        script_instance.is_running = false;
+                                                        return;
+                                                    };
 
-                                                        for callback_type in CallbackType::iter() {
-                                                            if let Ok(function) = self.lua_runtime.globals().get::<Function>(callback_type.to_string()) {
-                                                                script_instance.callbacks.insert(callback_type, function);
-                                                            }
+                                                    for callback_type in CallbackType::iter() {
+                                                        #[cfg(not(target_family = "wasm"))]
+                                                        if let Ok(function) = self.lua_runtime.globals().get::<Function>(callback_type.to_string()) {
+                                                            script_instance.callbacks.insert(callback_type, function);
                                                         }
 
-                                                        // If there were no callbacks we can reset the state since nothing is getting called by the app at runtime
-                                                        if script_instance.callbacks.is_empty() {
-                                                            script_instance.is_running = false;
+                                                        #[cfg(target_family = "wasm")]
+                                                        {
+                                                            self.lua_runtime.get().lock().enter(|ctx| {
+                                                                let function = ctx.get_global(callback_type.to_string());
+
+                                                                if let Value::Function(function) = function {
+
+                                                                }
+                                                            });
                                                         }
                                                     }
 
-                                                    //Check if this is a wasm build, so that when the button is pressed it will play the written demo
-                                                    #[cfg(target_family = "wasm")]
-                                                    {
-                                                        // The first script will draw a rectangle.
-                                                        if script_idx == 0 {
-                                                            if self.drawers.get("drawer1").is_none() {
-                                                                self.drawers.insert(String::from("drawer1"), Drawer::default());
-                                                            }
-    
-                                                            if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
-                                                                drawer.ang = Angle::from_degrees(90.);
-                                                                drawer.pos = Vec2::default();
-
-                                                                drawer.drawings.polygons.push(FilledPolygonPoints {
-                                                                    points: vec![
-                                                                        Vec3::new(0., 0., 0.),
-                                                                        Vec3::new(
-                                                                            100.,
-                                                                            0.,
-                                                                            0.,
-                                                                        ),
-                                                                        Vec3::new(
-                                                                            100.,
-                                                                            100.,
-                                                                            0.,
-                                                                        ),
-                                                                        Vec3::new(
-                                                                            0.,
-                                                                            100.,
-                                                                            0.,
-                                                                        ),
-                                                                    ],
-                                                                    color: Color::WHITE,
-                                                                });
-                                                            }
-                                                            
-                                                        }
-                                                        // The second script will draw a circle and rotate the drawer with 10 degrees.
-                                                        else if script_idx == 1 {
-                                                            if self.drawers.get("drawer1").is_none() {
-                                                                self.drawers.insert(String::from("drawer1"), Drawer::default());
-                                                            }
-    
-                                                            if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
-                                                                let mut circle_positions = vec![(Vec3::new(drawer.pos.x, drawer.pos.y, 0.), Color::WHITE)];
-    
-                                                                // `i` counts as the current angle
-                                                                for i in drawer.ang.to_degrees() as i32..drawer.ang.to_degrees() as i32 + 360 {
-                                                                    let radians = (i as f32).to_radians();
-    
-                                                                    circle_positions.push((Vec3::new(circle_positions.last().unwrap().0.x + (1. * radians.cos()), circle_positions.last().unwrap().0.y + (1. * radians.sin()), 0.), Color::WHITE));
-                                                                }
-    
-                                                                drawer.drawings.lines.push(LineStrip::new(circle_positions));
-    
-                                                                drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + 10.);
-                                                            }
-                                                        }
-                                                        else if script_idx == 2 {
-                                                            if self.drawers.get("drawer1").is_none() {
-                                                                self.drawers.insert(String::from("drawer1"), Drawer::default());
-                                                            }
-    
-                                                            if let Some(mut drawer) = self.drawers.get_mut("drawer1") {
-                                                                let angle_rad = drawer.ang.to_radians();
-                                                                let origin = drawer.pos;
-
-                                                                // Forward units
-                                                                let amount_forward = 100.;
-
-                                                                // The new x.
-                                                                let x = origin.x
-                                                                    + (amount_forward * angle_rad.cos());
-                                                                // The new y.
-                                                                let y = origin.y
-                                                                    + (amount_forward * angle_rad.sin());
-
-                                                                drawer.pos = Vec2::new(x, y);
-                                                                drawer.drawings.lines.push(LineStrip::new(vec![(Vec3::new(origin.x, origin.y, 0.), Color::WHITE), (Vec3::new(x, y, 0.), Color::WHITE)]))
-                                                            }
-                                                        }
+                                                    // If there were no callbacks we can reset the state since nothing is getting called by the app at runtime
+                                                    if script_instance.callbacks.is_empty() {
                                                         script_instance.is_running = false;
                                                     }
                                                 }
@@ -597,9 +493,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
     
                                                 // Create a ScrollArea to be able to display / edit more text
                                                 ScrollArea::both().show(ui, |ui| {
-                                                    // If this is open in a wasm environment we should allow the modification of demos as they're pre programmed
-                                                    ui.disable();
-
                                                     // Add the text editor with the custom layouter to the ui
                                                     ui.add(
                                                         TextEdit::multiline(
@@ -617,17 +510,15 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                         
                                         // Add the delete button so that the script can be deleted
-                                        ui.add_enabled_ui(!cfg!(target_family = "wasm"), |ui| {
-                                            if ui.button("Delete").clicked() {
-                                                // Flag the script as to be deleted
-                                                should_keep = false;
-    
-                                                //Insert the script into the rubbish bin
-                                                self.rubbish_bin.lock().push(RubbishBinItem::Script(
-                                                    script_instance.clone(),
-                                                ));
-                                            }
-                                        });
+                                        if ui.button("Delete").clicked() {
+                                            // Flag the script as to be deleted
+                                            should_keep = false;
+
+                                            //Insert the script into the rubbish bin
+                                            self.rubbish_bin.lock().push(RubbishBinItem::Script(
+                                                script_instance.clone(),
+                                            ));
+                                        }
 
                                         // Display the rename menu button
                                         let rename_menu = ui.menu_button("Rename Script", |ui| {
@@ -701,9 +592,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             match self
                                                 .lua_runtime
                                                 // Load the script as a string
-                                                .load(script_instance.script.clone())
-                                                // Execute the String
-                                                .exec()
+                                                .execute_code(&script_instance.script)
                                             {
                                                 // The script has finished executing
                                                 Ok(_output) => {
@@ -754,12 +643,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                                             //Load back the state
                                             self.drawers.clone_from(&current_drawer_canvas);
-                                        }
-                                        
-                                        #[cfg(target_family = "wasm")] {
-                                            ui.add_enabled_ui(false, |ui| {
-                                                let _ = ui.button("Create Demo").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
-                                            });
                                         }
                                     });
                                 });
@@ -829,7 +712,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                         }
                     }
                     #[cfg(target_family = "wasm")] {
-                        // Create placeholder button is wasm
+                        // Create placeholder button on wasm
                         ui.add_enabled_ui(false, |ui| {
                             let _ = ui.button("Import from File").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
                         });
@@ -837,33 +720,39 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
 
                     ui.separator();
 
-                    ui.menu_button("Import from Text", |ui| {
+                    let clipboard_menu = ui.menu_button("Import from Clipboard", |ui| {
                         ui.horizontal(|ui| {
                             // We only enabled importing from text in the desktop mode.
-                            ui.add_enabled_ui(!cfg!(target_family = "wasm"), |ui| {
-                                if ui.button("Import").clicked() {
-                                    match BASE64_STANDARD.decode(self.demo_rename_text_buffer.lock().to_string()) {
-                                        Ok(bytes) => {
-                                            let decompressed_bytes = decompress_to_vec(&bytes).unwrap();
-                                            
-                                            let demo_instance = deserialize_bytes_into::<DemoInstance>(decompressed_bytes).unwrap();
-        
-                                            self.demos.lock().push(demo_instance);
-    
-                                            ui.close_menu();
-                                        },
-                                        Err(_err) => {
-                                            self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text("Text copied from clipboard does not contain any DemoInstances."));
-                                        },
-                                    }
-    
-                                    self.demo_rename_text_buffer.lock().clear();
+                            if ui.button("Import").clicked() {
+                                // Lock the text buffer so we can move it into the function
+                                let buffer = self.import_from_clipboard_buffer.lock().to_string();
+                                
+                                // Import from clipboard
+                                match import_from_clipboard::<DemoInstance>(ui, buffer) {
+                                    Ok(demo_instance) => {
+                                        self.demos.lock().push(demo_instance);
+                                    },
+                                    Err(_err) => {
+                                        self.toasts.lock().add(Toast::new().kind(egui_toast::ToastKind::Error).text(format!("Text copied from clipboard does not contain a valid `DemoInstance`: {_err}")));
+                                    },
                                 }
-                            });
 
-                            ui.text_edit_singleline(&mut *self.demo_rename_text_buffer.lock());
+                                // Clear text buffer
+                                self.import_from_clipboard_buffer.lock().clear();
+                            
+                                // Close menu
+                                ui.close_menu();
+                            }
+
+                            ui.text_edit_singleline(&mut *self.import_from_clipboard_buffer.lock());
                         });
-                    }); 
+                    });
+
+                    // If the import from clipboard menu was opened the demo rename buffer should automaticly cleared 
+                    if clipboard_menu.response.clicked() {
+                        // Clear buffer
+                        self.import_from_clipboard_buffer.lock().clear();
+                    }
                 });
 
                 ui.separator();
@@ -881,10 +770,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                 ui.add_enabled_ui(
                                     self.demo_buffer.get_state() == DemoBufferState::None,
                                     |ui| {
-                                        // Disable the UI when compiled to wasm as playbacks don't work in wasm.
-                                        #[cfg(target_family = "wasm")]
-                                        ui.disable();
-                                    
                                         if ui.button("Playback").clicked() {
                                             //Clear environment
                                             self.drawers.clear();
@@ -974,6 +859,7 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                     }
                                                 }
                                             }
+
                                             #[cfg(target_family = "wasm")] {
                                                 ui.add_enabled_ui(false, |ui| {
                                                     let _ = ui.button("Export as File").on_disabled_hover_text(RichText::from("File handling is not supported in WASM.").color(Color32::RED));
@@ -1108,6 +994,20 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
         }
         .into()
     }
+}
+
+fn import_from_clipboard<T: for<'a> Deserialize<'a>>(ui: &mut egui::Ui, buffer: String) -> anyhow::Result<T> {
+    let bytes = BASE64_STANDARD.decode(buffer)?;
+        
+    let decompressed_bytes = decompress_to_vec(&bytes).map_err(|err| {
+        anyhow::Error::msg(format!("Failed to find decompressable data, {err}"))
+    })?;
+
+    let clipboard_instance = deserialize_bytes_into::<T>(decompressed_bytes)?;
+
+    ui.close_menu();
+        
+    Ok(clipboard_instance)
 }
 
 pub fn main_ui(
@@ -1255,7 +1155,6 @@ pub fn main_ui(
 
                 ui_state.item_manager.ui(
                     &mut ManagerBehavior {
-                        #[cfg(not(target_family = "wasm"))]
                         lua_runtime: lua_runtime.clone(),
                         toasts,
                         drawers: drawers.clone(),
@@ -1265,7 +1164,7 @@ pub fn main_ui(
                         demos,
                         demo_buffer,
                         scripts,
-                        demo_rename_text_buffer: demo_text_buffer,
+                        import_from_clipboard_buffer: demo_text_buffer,
                     },
                     ui,
                 );
@@ -1382,7 +1281,9 @@ pub fn main_ui(
                                         {
                                             ui_state.command_line_outputs.write().clear();
                                         }
-                                        else if command_line_buffer == "?" || command_line_buffer == "help" {
+                                        else if command_line_buffer == "?"
+                                            || command_line_buffer == "help"
+                                        {
                                             ui_state.documentation_window = true;
                                         }
                                         else {
@@ -1393,9 +1294,7 @@ pub fn main_ui(
                                             );
 
                                             // Check if it has the "wasm" target family, as the lua runtime is not supported in wasm
-                                            match lua_runtime
-                                                .execute_code(&command_line_buffer)
-                                            {
+                                            match lua_runtime.execute_code(&command_line_buffer) {
                                                 Ok(_output) => (),
                                                 Err(_err) => {
                                                     ui_state.command_line_outputs.write().push(
@@ -1439,29 +1338,29 @@ pub fn main_ui(
                                     }
 
                                     if down_was_pressed {
-                                            if ui_state.command_line_input_index
-                                                == ui_state.command_line_inputs.len()
-                                            {
-                                                ui_state.command_line_buffer = ui_state
-                                                    .command_line_inputs
-                                                    [ui_state.command_line_input_index - 2]
-                                                    .clone();
-                                                ui_state.command_line_input_index -= 2;
-                                            }
-                                            else if ui_state.command_line_input_index > 0 {
-                                                ui_state.command_line_input_index -= 1;
-
-                                                ui_state.command_line_buffer = ui_state
-                                                    .command_line_inputs
-                                                    [ui_state.command_line_input_index]
-                                                    .clone();
-                                            }
-                                            else {
-                                                ui_state.command_line_buffer.clear();
-                                            }
+                                        if ui_state.command_line_input_index
+                                            == ui_state.command_line_inputs.len()
+                                        {
+                                            ui_state.command_line_buffer = ui_state
+                                                .command_line_inputs
+                                                [ui_state.command_line_input_index - 2]
+                                                .clone();
+                                            ui_state.command_line_input_index -= 2;
                                         }
+                                        else if ui_state.command_line_input_index > 0 {
+                                            ui_state.command_line_input_index -= 1;
+
+                                            ui_state.command_line_buffer = ui_state
+                                                .command_line_inputs
+                                                [ui_state.command_line_input_index]
+                                                .clone();
+                                        }
+                                        else {
+                                            ui_state.command_line_buffer.clear();
+                                        }
+                                    }
                                 }
-                                text_edit.on_hover_text("Enter ? or help to get more information.");
+                                text_edit.on_hover_text(r#"Enter "?" or "help" to get more information."#);
                             });
                         });
                     });
@@ -1474,7 +1373,6 @@ pub fn main_ui(
     let mut is_playbacker_open = true;
 
     // Demo playbacks are not enabled in the wasm-environment
-    #[cfg(not(target_family = "wasm"))]
     if let Some(buffer) = ui_state
         .demo_buffer
         .clone()
