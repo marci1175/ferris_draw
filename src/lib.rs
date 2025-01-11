@@ -214,7 +214,7 @@ impl Default for DrawRequester
 }
 
 #[derive(Resource, Clone)]
-pub struct LuaRuntime(
+pub struct LuaRuntime (
     #[cfg(not(target_family = "wasm"))] pub mlua::Lua,
     #[cfg(target_family = "wasm")] pub Arc<Fragile<Mutex<piccolo::Lua>>>,
 );
@@ -249,15 +249,17 @@ impl LuaRuntime
             use piccolo::{Closure, Executor};
 
             let mut lua = self.get().lock();
-            let executor = lua.enter(|ctx| {
-                let closure = Closure::load(ctx, None, code.as_bytes()).unwrap();
+            let executor = lua.try_enter(|ctx| {
+                let closure = Closure::load(ctx, None, code.as_bytes())?;
 
-                ctx.stash(Executor::start(
-                    ctx,
-                    piccolo::Function::Closure(closure),
-                    (),
-                ))
-            });
+                Ok(
+                    ctx.stash(Executor::start(
+                        ctx,
+                        piccolo::Function::Closure(closure),
+                        (),
+                    ))
+                )
+            })?;
 
             lua.execute::<()>(&executor)?;
         }
@@ -1108,10 +1110,10 @@ pub fn init_lua_functions_wasm(
 
     lua_rt.enter(|ctx| {
         let demo_buffer_handle = demo_buffer.clone();
-        let print = Callback::from_fn(&ctx, move |_, _, stack| {
-            let arg_value = stack.get(0);
+        let print = Callback::from_fn(&ctx, move |_, _, mut stack| {
+            let arg_value = stack.pop_front();
 
-            if arg_value.is_nil() {
+            if !arg_value.is_nil() {
                 let msg = arg_value.to_string();
 
                 if let Some(buffer) = demo_buffer_handle.get_state_if_eq(DemoBufferState::Record) {
@@ -1134,7 +1136,7 @@ pub fn init_lua_functions_wasm(
 
         // Creates a new drawer with the Drawer handle, from a unique handle.
         let new = Callback::from_fn(&ctx, move |_, _, mut stack| {
-            let arg_value = stack.get(0);
+            let arg_value = stack.pop_front();
 
             if !arg_value.is_nil() {
                 let id = arg_value.to_string();
@@ -1167,7 +1169,7 @@ pub fn init_lua_functions_wasm(
 
         // Sets the drawer's angle.
         let rotate_drawer = Callback::from_fn(&ctx, move |_, _, mut stack| {
-            let args = (stack.pop_back(), stack.pop_back());
+            let args = (stack.pop_front(), stack.pop_front());
 
             if args.0.is_nil() || args.1.is_nil() {
                 return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
@@ -1268,11 +1270,11 @@ pub fn init_lua_functions_wasm(
         // Sets the color of the drawing
         let color = Callback::from_fn(&ctx, move |_, _, mut stack| {
             let args = (
-                stack.pop_back(),
-                stack.pop_back(),
-                stack.pop_back(),
-                stack.pop_back(),
-                stack.pop_back(),
+                stack.pop_front(),
+                stack.pop_front(),
+                stack.pop_front(),
+                stack.pop_front(),
+                stack.pop_front(),
             );
 
             if args.0.is_nil()
@@ -1340,7 +1342,7 @@ pub fn init_lua_functions_wasm(
 
         // Moves the drawer forward by a set amount of units, this makes the drawer draw too.
         let forward = Callback::from_fn(&ctx, move |_, _, mut stack| {
-            let args = (stack.pop_back(), stack.pop_back());
+            let args = (stack.pop_front(), stack.pop_front());
 
             if args.0.is_nil() || args.1.is_nil() {
                 return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
@@ -1651,7 +1653,7 @@ pub fn init_lua_functions_wasm(
         let demo_buffer_handle = demo_buffer.clone();
     
         let notification = Callback::from_fn(&ctx, move |_, _, mut stack| {
-            let params = (stack.pop_back(), stack.pop_back());
+            let params = (stack.pop_front(), stack.pop_front());
 
             if params.0.is_nil() || params.1.is_nil() {
                 return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
@@ -1684,7 +1686,7 @@ pub fn init_lua_functions_wasm(
         let drawers_clone = drawers_handle.clone();
 
         let position = Callback::from_fn(&ctx, move |_, _, mut stack| {
-            let id = stack.pop_back();
+            let id = stack.pop_front();
 
             if id.is_nil() {
                 return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));
@@ -1712,7 +1714,7 @@ pub fn init_lua_functions_wasm(
         let demo_buffer_handle = demo_buffer.clone();
 
         let rectangle = Callback::from_fn(&ctx, move |_, _, mut stack| {
-            let params = (stack.pop_back(), stack.pop_back(), stack.pop_back());
+            let params = (stack.pop_front(), stack.pop_front(), stack.pop_front());
 
             if params.0.is_nil() || params.1.is_nil() || params.2.is_nil() {
                 return Err(piccolo::Error::Lua(LuaError::from(Value::Nil)));

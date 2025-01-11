@@ -12,12 +12,10 @@ use miniz_oxide::{deflate::CompressionLevel, inflate::decompress_to_vec};
 #[cfg(not(target_family = "wasm"))]
 use mlua::{Function, IntoLua};
 
+use piccolo::Executor;
 use serde::Deserialize;
 use std::{
-    collections::{HashMap, VecDeque},
-    fs,
-    path::PathBuf,
-    sync::Arc,
+    collections::{HashMap, HashSet, VecDeque}, fs, marker::PhantomData, path::PathBuf, sync::Arc
 };
 use strum::IntoEnumIterator;
 
@@ -234,7 +232,7 @@ pub struct ScriptInstance
 
     #[serde(skip)]
     #[cfg(target_family = "wasm")]
-    pub callbacks: HashMap<CallbackType, Fragile<piccolo::Function<'static>>>,
+    pub callbacks: HashSet<CallbackType>,
 }
 
 impl ScriptInstance
@@ -246,7 +244,12 @@ impl ScriptInstance
             is_running: false,
             name,
             script,
+
+            #[cfg(not(target_family = "wasm"))]
             callbacks: HashMap::new(),
+
+            #[cfg(target_family = "wasm")]
+            callbacks: HashSet::new(),
         }
     }
 }
@@ -439,8 +442,9 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                             self.lua_runtime.get().lock().enter(|ctx| {
                                                                 let function = ctx.get_global(callback_type.to_string());
 
+                                                                // If we could get the global function from the callback's name we can store the callback type in order to know which of the callbacks are available in the script.
                                                                 if let Value::Function(function) = function {
-
+                                                                    script_instance.callbacks.insert(callback_type);
                                                                 }
                                                             });
                                                         }
@@ -1027,12 +1031,22 @@ pub fn main_ui(
         if reader.focused {
             let keys_down = reader.keys_down.clone();
             let callback_type = CallbackType::OnInput;
-            let data = keys_down
+            
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let data = keys_down
                 .iter()
                 .enumerate()
                 .map(|(idx, key)| (idx, key.name().to_string()));
 
-            invoke_callback_from_scripts(&ui_state, &lua_runtime, callback_type, Some(data));
+                invoke_callback_from_scripts(&ui_state, &lua_runtime, callback_type, Some(data));
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                let data: Vec<String> = keys_down.iter().map(|key| key.to_string()).collect();
+
+                invoke_callback_from_scripts_wasm(&ui_state, &lua_runtime, callback_type, Some(data));
+            }
         }
     });
 
@@ -1485,7 +1499,7 @@ fn invoke_callback_from_scripts<K, V>(
     ui_state: &ResMut<'_, UiState>,
     lua_runtime: &ResMut<'_, LuaRuntime>,
     callback_type: CallbackType,
-    data: Option<impl IntoIterator<Item = (K, V)> + Clone>,
+    argument: Option<impl IntoIterator<Item = (K, V)> + Clone>,
 ) where
     K: IntoLua,
     V: IntoLua,
@@ -1497,7 +1511,7 @@ fn invoke_callback_from_scripts<K, V>(
         }
 
         // If the data is a Some that means that we want to invoke the callback with an argument passed in.
-        if let Some(ref data) = data {
+        if let Some(ref data) = argument {
             if let Some(function) = script.callbacks.get(&callback_type) {
                 if let Err(err) = function.call::<()>(lua_runtime.create_table_from(data.clone())) {
                     // Add the error into the toasts if it returned an error
@@ -1525,6 +1539,48 @@ fn invoke_callback_from_scripts<K, V>(
             };
         }
     }
+}
+
+#[cfg(target_family = "wasm")]
+fn invoke_callback_from_scripts_wasm(
+    ui_state: &ResMut<'_, UiState>,
+    lua_runtime: &ResMut<'_, LuaRuntime>,
+    callback_type: CallbackType,
+    args: Option<Vec<String>>,
+) -> anyhow::Result<()> {
+    for script in ui_state.scripts.lock().iter_mut() {
+        // If the script is not running dont call its callbacks
+        if !script.is_running {
+            continue;
+        }
+
+        if script.callbacks.contains(&callback_type) {
+            let mut lua_vm = lua_runtime.get().lock();
+            let stashed_function = lua_vm.try_enter(|ctx: piccolo::Context| {
+                let global_function = ctx.get_global(callback_type.to_string());
+                
+                let stashed_function = match global_function {
+                    piccolo::Value::Function(function) => {
+                        if let Some(args) = &args {
+                            let value = ctx.set_global("callback_argument", args.clone())?;
+                            ctx.stash(Executor::start(ctx, function, value))
+                        }
+                        else {
+                            ctx.stash(Executor::start(ctx, function, ()))
+                        }
+                    }
+    
+                    _ => unreachable!(),
+                };
+    
+                Ok(stashed_function)
+            })?;
+
+            lua_vm.execute::<()>(&stashed_function)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// This function reads the bytes available at the specific [`PathBuf`] path, and then Deserializes into type [`T`] from the bytes.
