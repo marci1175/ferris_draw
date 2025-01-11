@@ -214,7 +214,7 @@ impl Default for DrawRequester
 }
 
 #[derive(Resource, Clone)]
-pub struct LuaRuntime (
+pub struct LuaRuntime(
     #[cfg(not(target_family = "wasm"))] pub mlua::Lua,
     #[cfg(target_family = "wasm")] pub Arc<Fragile<Mutex<piccolo::Lua>>>,
 );
@@ -252,13 +252,11 @@ impl LuaRuntime
             let executor = lua.try_enter(|ctx| {
                 let closure = Closure::load(ctx, None, code.as_bytes())?;
 
-                Ok(
-                    ctx.stash(Executor::start(
-                        ctx,
-                        piccolo::Function::Closure(closure),
-                        (),
-                    ))
-                )
+                Ok(ctx.stash(Executor::start(
+                    ctx,
+                    piccolo::Function::Closure(closure),
+                    (),
+                )))
             })?;
 
             lua.execute::<()>(&executor)?;

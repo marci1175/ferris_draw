@@ -15,7 +15,11 @@ use mlua::{Function, IntoLua};
 use piccolo::Executor;
 use serde::Deserialize;
 use std::{
-    collections::{HashMap, HashSet, VecDeque}, fs, marker::PhantomData, path::PathBuf, sync::Arc
+    collections::{HashMap, HashSet, VecDeque},
+    fs,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::Arc,
 };
 use strum::IntoEnumIterator;
 
@@ -24,14 +28,14 @@ use parking_lot::{Mutex, RwLock};
 use crate::LuaRuntime;
 
 #[cfg(target_family = "wasm")]
-use piccolo::{Function, Value};
-#[cfg(target_family = "wasm")]
 use crate::{Angle, Drawer, FilledPolygonPoints, LineStrip};
 #[cfg(target_family = "wasm")]
 use bevy::{
     color::Color,
     math::{Vec2, Vec3},
 };
+#[cfg(target_family = "wasm")]
+use piccolo::{Function, Value};
 
 use crate::{
     CallbackType, DemoBuffer, DemoBufferState, DemoInstance, DemoStep, Drawers, ScriptLinePrompts,
@@ -495,20 +499,22 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                                         ui.fonts(|f| f.layout_job(layout_job))
                                                     };
     
-                                                // Create a ScrollArea to be able to display / edit more text
-                                                ScrollArea::both().show(ui, |ui| {
-                                                    // Add the text editor with the custom layouter to the ui
-                                                    ui.add(
-                                                        TextEdit::multiline(
-                                                            // Mutable script reference
-                                                            &mut script_instance.script,
-                                                        )
-                                                        // Code editor
-                                                        .code_editor()
-                                                        // Add the custom layouter
-                                                        .layouter(&mut layouter),
-                                                    );
-                                                });
+                                                    ui.allocate_ui(vec2(300., 500.), |ui| {
+                                                        // Create a ScrollArea to be able to display / edit more text
+                                                        ScrollArea::both().stick_to_bottom(true).show(ui, |ui| {
+                                                            // Add the text editor with the custom layouter to the ui
+                                                            ui.add(
+                                                                TextEdit::multiline(
+                                                                    // Mutable script reference
+                                                                    &mut script_instance.script,
+                                                                )
+                                                                // Code editor
+                                                                .code_editor()
+                                                                // Add the custom layouter
+                                                                .layouter(&mut layouter),
+                                                            );
+                                                        });
+                                                    });
                                             });
                                         });
 
@@ -579,7 +585,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                         ui.separator();
 
                                         // Add the Create demo button
-                                        #[cfg(not(target_family = "wasm"))]
                                         if ui.button("Create Demo").clicked() {
                                             //Store current drawers and canvas
                                             let current_drawer_canvas =
@@ -778,8 +783,6 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
                                             //Clear environment
                                             self.drawers.clear();
                                             
-                                            // Check if this is a wasm environent as playback are not enabled in the browser.
-                                            #[cfg(not(target_family = "wasm"))]
                                             // Check if the demo is empty
                                             if let Some(first_step) = demo.demo_steps.first() {
                                                 // Check if the first step is a valid function
@@ -1000,17 +1003,20 @@ impl egui_tiles::Behavior<ManagerPane> for ManagerBehavior
     }
 }
 
-fn import_from_clipboard<T: for<'a> Deserialize<'a>>(ui: &mut egui::Ui, buffer: String) -> anyhow::Result<T> {
+fn import_from_clipboard<T: for<'a> Deserialize<'a>>(
+    ui: &mut egui::Ui,
+    buffer: String,
+) -> anyhow::Result<T>
+{
     let bytes = BASE64_STANDARD.decode(buffer)?;
-        
-    let decompressed_bytes = decompress_to_vec(&bytes).map_err(|err| {
-        anyhow::Error::msg(format!("Failed to find decompressable data, {err}"))
-    })?;
+
+    let decompressed_bytes = decompress_to_vec(&bytes)
+        .map_err(|err| anyhow::Error::msg(format!("Failed to find decompressable data, {err}")))?;
 
     let clipboard_instance = deserialize_bytes_into::<T>(decompressed_bytes)?;
 
     ui.close_menu();
-        
+
     Ok(clipboard_instance)
 }
 
@@ -1031,13 +1037,13 @@ pub fn main_ui(
         if reader.focused {
             let keys_down = reader.keys_down.clone();
             let callback_type = CallbackType::OnInput;
-            
+
             #[cfg(not(target_family = "wasm"))]
             {
                 let data = keys_down
-                .iter()
-                .enumerate()
-                .map(|(idx, key)| (idx, key.name().to_string()));
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, key)| (idx, key.name().to_string()));
 
                 invoke_callback_from_scripts(&ui_state, &lua_runtime, callback_type, Some(data));
             }
@@ -1045,7 +1051,12 @@ pub fn main_ui(
             {
                 let data: Vec<String> = keys_down.iter().map(|key| key.to_string()).collect();
 
-                invoke_callback_from_scripts_wasm(&ui_state, &lua_runtime, callback_type, Some(data));
+                invoke_callback_from_scripts_wasm(
+                    &ui_state,
+                    &lua_runtime,
+                    callback_type,
+                    Some(data),
+                );
             }
         }
     });
@@ -1374,7 +1385,9 @@ pub fn main_ui(
                                         }
                                     }
                                 }
-                                text_edit.on_hover_text(r#"Enter "?" or "help" to get more information."#);
+                                text_edit.on_hover_text(
+                                    r#"Enter "?" or "help" to get more information."#,
+                                );
                             });
                         });
                     });
@@ -1411,7 +1424,7 @@ pub fn main_ui(
                                 if ui.button("◀").clicked() {
                                     drawers.clear();
 
-                                    let desired_idx = ui_state.demo_buffer.iter_idx - 1;
+                                    let desired_idx = ui_state.demo_buffer.iter_idx;
 
                                     if desired_idx == 0 {
                                         // This cannot panic as we would have paniced already
@@ -1547,7 +1560,8 @@ fn invoke_callback_from_scripts_wasm(
     lua_runtime: &ResMut<'_, LuaRuntime>,
     callback_type: CallbackType,
     args: Option<Vec<String>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+{
     for script in ui_state.scripts.lock().iter_mut() {
         // If the script is not running dont call its callbacks
         if !script.is_running {
@@ -1558,7 +1572,7 @@ fn invoke_callback_from_scripts_wasm(
             let mut lua_vm = lua_runtime.get().lock();
             let stashed_function = lua_vm.try_enter(|ctx: piccolo::Context| {
                 let global_function = ctx.get_global(callback_type.to_string());
-                
+
                 let stashed_function = match global_function {
                     piccolo::Value::Function(function) => {
                         if let Some(args) = &args {
@@ -1568,11 +1582,11 @@ fn invoke_callback_from_scripts_wasm(
                         else {
                             ctx.stash(Executor::start(ctx, function, ()))
                         }
-                    }
-    
+                    },
+
                     _ => unreachable!(),
                 };
-    
+
                 Ok(stashed_function)
             })?;
 
