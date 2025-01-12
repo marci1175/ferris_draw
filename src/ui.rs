@@ -25,7 +25,7 @@ use strum::IntoEnumIterator;
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::LuaRuntime;
+use crate::{LuaRuntime, SetLenBuffer};
 
 #[cfg(target_family = "wasm")]
 use crate::{Angle, Drawer, FilledPolygonPoints, LineStrip};
@@ -80,7 +80,7 @@ pub struct UiState
     /// The command line outputs / inputs.
     /// These are displayed to the user.
     #[serde(skip)]
-    pub command_line_outputs: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+    pub command_line_outputs: Arc<RwLock<SetLenBuffer<ScriptLinePrompts>>>,
 
     /// The commands entered in the command line.
     #[serde(skip)]
@@ -140,7 +140,7 @@ impl Default for UiState
             toasts: Arc::new(Mutex::new(Toasts::new())),
             rename_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
             name_buffer: Arc::new(parking_lot::Mutex::new(String::new())),
-            command_line_outputs: Arc::new(RwLock::new(vec![])),
+            command_line_outputs: Arc::new(RwLock::new(SetLenBuffer::new(100))),
             command_line_buffer: String::new(),
             command_line_inputs: VecDeque::new(),
             command_line_input_index: 0,
@@ -1028,11 +1028,36 @@ pub fn main_ui(
 )
 {
     let ctx = contexts.ctx_mut();
-
+    
     // Call scripts with the `on_draw` callback
+    #[cfg(target_family = "wasm")]
+    {
+        let pos = ctx.pointer_latest_pos();
+
+        if let Some(pos) = pos {
+            invoke_callback_from_scripts_wasm(
+                &ui_state,
+                &lua_runtime,
+                CallbackType::OnDraw,
+                vec![pos.x.to_string(), pos.y.to_string()],
+            );
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let pos = ctx.pointer_latest_pos();
+
+        if let Some(pos) = pos {
+            invoke_callback_from_scripts(
+                &ui_state,
+                &lua_runtime,
+                CallbackType::OnDraw,
+                vec![pos.x, pos.y].iter().enumerate().map(|(idx, pos)| {(idx, *pos as i32)})
+            );
+        }
+    }
 
     // Call scripts with the `on_input` callback
-    #[cfg(not(target_family = "wasm"))]
     ctx.input(|reader| {
         if reader.focused {
             let keys_down = reader.keys_down.clone();
@@ -1045,17 +1070,17 @@ pub fn main_ui(
                     .enumerate()
                     .map(|(idx, key)| (idx, key.name().to_string()));
 
-                invoke_callback_from_scripts(&ui_state, &lua_runtime, callback_type, Some(data));
+                invoke_callback_from_scripts(&ui_state, &lua_runtime, callback_type, data);
             }
             #[cfg(target_family = "wasm")]
             {
-                let data: Vec<String> = keys_down.iter().map(|key| key.to_string()).collect();
+                let data: Vec<String> = keys_down.iter().map(|key| key.name().to_string()).collect();
 
                 invoke_callback_from_scripts_wasm(
                     &ui_state,
                     &lua_runtime,
                     callback_type,
-                    Some(data),
+                    vec![],
                 );
             }
         }
@@ -1512,7 +1537,7 @@ fn invoke_callback_from_scripts<K, V>(
     ui_state: &ResMut<'_, UiState>,
     lua_runtime: &ResMut<'_, LuaRuntime>,
     callback_type: CallbackType,
-    argument: Option<impl IntoIterator<Item = (K, V)> + Clone>,
+    argument: impl IntoIterator<Item = (K, V)> + Clone,
 ) where
     K: IntoLua,
     V: IntoLua,
@@ -1524,33 +1549,18 @@ fn invoke_callback_from_scripts<K, V>(
         }
 
         // If the data is a Some that means that we want to invoke the callback with an argument passed in.
-        if let Some(ref data) = argument {
-            if let Some(function) = script.callbacks.get(&callback_type) {
-                if let Err(err) = function.call::<()>(lua_runtime.create_table_from(data.clone())) {
-                    // Add the error into the toasts if it returned an error
-                    ui_state.toasts.lock().add(
-                        Toast::new()
-                            .kind(egui_toast::ToastKind::Error)
-                            .text(err.to_string()),
-                    );
-
-                    script.is_running = false;
-                };
-            };
-        }
-        // If the data is a None it means that the callback is to be invoked without arguments.
-        else if let Some(function) = script.callbacks.get(&callback_type) {
-            if let Err(err) = function.call::<()>(()) {
+        if let Some(function) = script.callbacks.get(&callback_type) {
+            if let Err(err) = function.call::<()>(lua_runtime.create_table_from(argument.clone())) {
                 // Add the error into the toasts if it returned an error
                 ui_state.toasts.lock().add(
                     Toast::new()
                         .kind(egui_toast::ToastKind::Error)
                         .text(err.to_string()),
-                );
-
-                script.is_running = false;
-            };
-        }
+                    );
+                    
+                    script.is_running = false;
+                };
+        };
     }
 }
 
@@ -1559,8 +1569,8 @@ fn invoke_callback_from_scripts_wasm(
     ui_state: &ResMut<'_, UiState>,
     lua_runtime: &ResMut<'_, LuaRuntime>,
     callback_type: CallbackType,
-    args: Option<Vec<String>>,
-) -> anyhow::Result<()>
+    args: Vec<String>,
+)
 {
     for script in ui_state.scripts.lock().iter_mut() {
         // If the script is not running dont call its callbacks
@@ -1569,31 +1579,40 @@ fn invoke_callback_from_scripts_wasm(
         }
 
         if script.callbacks.contains(&callback_type) {
-            let mut lua_vm = lua_runtime.get().lock();
-            let stashed_function = lua_vm.try_enter(|ctx: piccolo::Context| {
-                let global_function = ctx.get_global(callback_type.to_string());
-
-                let stashed_function = match global_function {
-                    piccolo::Value::Function(function) => {
-                        if let Some(args) = &args {
-                            let value = ctx.set_global("callback_argument", args.clone())?;
-                            ctx.stash(Executor::start(ctx, function, value))
-                        }
-                        else {
-                            ctx.stash(Executor::start(ctx, function, ()))
-                        }
-                    },
-
-                    _ => unreachable!(),
-                };
-
-                Ok(stashed_function)
-            })?;
-
-            lua_vm.execute::<()>(&stashed_function)?;
+            match run_callback(lua_runtime, callback_type, &args) {
+                Ok(_) => (),
+                Err(err) => {
+                    ui_state.toasts.lock().add(
+                        Toast::new()
+                            .kind(egui_toast::ToastKind::Error)
+                            .text(err.to_string()),
+                        );
+                        
+                    script.is_running = false;
+                },
+            }
         }
     }
+}
 
+#[cfg(target_family = "wasm")]
+fn run_callback(lua_runtime: &ResMut<'_, LuaRuntime>, callback_type: CallbackType, args: &Vec<String>) -> Result<(), anyhow::Error> {
+    let mut lua_vm = lua_runtime.get().lock();
+    let stashed_function = lua_vm.try_enter(|ctx: piccolo::Context| {
+        let global_function = ctx.get_global(callback_type.to_string());
+
+        let stashed_function = match global_function {
+            piccolo::Value::Function(function) => {
+                let value = ctx.set_global("callback_argument", args.clone())?;
+                ctx.stash(Executor::start(ctx, function, value))
+            },
+
+            _ => unreachable!(),
+        };
+
+        Ok(stashed_function)
+    })?;
+    lua_vm.execute::<()>(&stashed_function)?;
     Ok(())
 }
 

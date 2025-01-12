@@ -17,12 +17,10 @@ use fragile::Fragile;
 use piccolo::{error::LuaError, Callback, RuntimeError, Value};
 
 use std::{
-    fmt::Display,
-    ops::{Deref, DerefMut},
-    sync::{
+    collections::VecDeque, fmt::Display, ops::{Deref, DerefMut}, sync::{
         mpsc::{channel, Receiver, Sender},
         Arc,
-    },
+    }
 };
 use strum::{EnumCount, EnumIter};
 
@@ -124,6 +122,7 @@ pub enum DemoStep
     Center(String),
     Forward(String, NonNaN<f32>),
     Rotate(String, NonNaN<f32>),
+    SetAngle(String, NonNaN<f32>),
     Color(String, NonNaN<f32>, NonNaN<f32>, NonNaN<f32>, NonNaN<f32>),
     Wipe,
     Remove(String),
@@ -133,6 +132,7 @@ pub enum DemoStep
     Rectangle(String, NonNaN<f32>, NonNaN<f32>),
     Print(String),
     Loop(usize, Vec<DemoStep>),
+    PointTo(String, f32, f32),
 }
 
 impl DemoStep
@@ -190,6 +190,12 @@ impl Display for DemoStep
                         .join("\n")
                 })
             },
+            DemoStep::SetAngle(id, angle) => {
+                format!(r#"set_angle("{id}", {angle})"#)
+            },
+            DemoStep::PointTo(id, dx, dy) => {
+                format!(r#"point_to("{id}", {dx}, {dy})"#)
+            }
         })
     }
 }
@@ -285,6 +291,50 @@ impl DerefMut for LuaRuntime
     fn deref_mut(&mut self) -> &mut Self::Target
     {
         &mut self.0
+    }
+}
+
+/// This buffer type has a set length. 
+/// The buffer is always `n` long, if newer items are pushed to the buffer the older ones will get dropped.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SetLenBuffer<T> {
+    inner_buffer: VecDeque<T>,
+    buffer_length: usize,
+}
+
+impl<T> SetLenBuffer<T> {
+    /// Creates a new instance of [`SetLenBuffer<T>`].
+    pub fn new(buffer_length: usize) -> Self {
+        Self { inner_buffer: VecDeque::with_capacity(buffer_length), buffer_length }
+    }
+
+    /// Pushes the item to the back of the inner buffer. 
+    /// If the current buffer's length == `self.buffer_length` it will first pop the first item from the list.
+    pub fn push(&mut self, item: T) {
+        if self.inner_buffer.len() >= self.buffer_length {
+            self.inner_buffer.pop_front();
+        }
+
+        self.inner_buffer.push_back(item);
+    }
+
+    /// Sets the maximum length of the inner buffer.
+    pub fn set_len(&mut self, len: usize) {
+        self.buffer_length = len;
+    }
+}
+
+impl<T> Deref for SetLenBuffer<T> {
+    type Target = VecDeque<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner_buffer
+    }
+}
+
+impl<T> DerefMut for SetLenBuffer<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner_buffer
     }
 }
 
@@ -540,7 +590,7 @@ pub fn init_lua_functions(
     lua_rt: ResMut<LuaRuntime>,
     draw_requester: Res<DrawRequester>,
     drawers_handle: Drawers,
-    output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+    output_list: Arc<RwLock<SetLenBuffer<ScriptLinePrompts>>>,
     demo_buffer: DemoBuffer<Vec<DemoStep>>,
     toast_handle: Arc<Mutex<Toasts>>,
 )
@@ -612,6 +662,46 @@ pub fn init_lua_functions(
 
                     // Set the drawer's angle.
                     drawer.ang = Angle::from_degrees(drawer.ang.to_degrees() + degrees);
+                },
+                None => {
+                    // Return the error
+                    return Err(mlua::Error::RuntimeError(format!(
+                        r#"The drawer with handle "{id}" doesn't exist."#
+                    )));
+                },
+            }
+
+            Ok(())
+        })
+        .unwrap();
+
+        let drawers_clone = drawers_handle.clone();
+        let demo_buffer_handle = demo_buffer.clone();
+        // Sets the drawer's angle.
+        
+        let set_drawer_angle = lua_vm
+        .create_function(move |_, params: (String, f32)| {
+            // Get params
+            let (id, degrees) = params;
+
+            // Clone the drawers' list handle
+            let drawer_handle = drawers_clone.get_mut(&id);
+
+            match drawer_handle {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::SetAngle(
+                            id,
+                            NonNaN::<f32>::new(degrees).unwrap_or_default(),
+                        ));
+
+                        return Ok(());
+                    }
+
+                    // Set the drawer's angle.
+                    drawer.ang = Angle::from_degrees(degrees);
                 },
                 None => {
                     // Return the error
@@ -1015,7 +1105,7 @@ pub fn init_lua_functions(
     let position = lua_vm
         .create_function(move |_, id: String| {
             match drawers_clone.get(&id) {
-                Some(drawer) => Ok((drawer.pos.x, drawer.pos.y)),
+                Some(drawer) => Ok([drawer.pos.x, drawer.pos.y]),
                 None => {
                     Err(Error::RuntimeError(format!(
                         r#"The drawer with handle "{id}" doesn't exist."#
@@ -1073,6 +1163,47 @@ pub fn init_lua_functions(
         })
         .unwrap();
 
+    let drawers_clone = drawers_handle.clone();
+    let demo_buffer_handle = demo_buffer.clone();
+
+    let point_to = lua_vm
+        .create_function(move |_, params: (String, f32, f32)| {
+            let (id, point_to_x, point_to_y) = params;
+
+            match drawers_clone.get_mut(&id) {
+                Some(mut drawer) => {
+                    if let Some(buffer) =
+                        demo_buffer_handle.get_state_if_eq(DemoBufferState::Record)
+                    {
+                        buffer.write().push(DemoStep::Rectangle(
+                            id,
+                            NonNaN::<f32>::new(point_to_x).unwrap_or_default(),
+                            NonNaN::<f32>::new(point_to_y).unwrap_or_default(),
+                        ));
+
+                        return Ok(());
+                    }
+
+                    let drawer_pos = drawer.pos;
+                    
+                    let dy = drawer_pos.y - point_to_y;
+                    let dx = drawer_pos.x - point_to_x;
+
+                    let atan = dy.atan2(dx);
+
+                    drawer.ang = Angle::from_degrees(atan.to_degrees() - 90.);
+                },
+                None => {
+                    return Err(Error::RuntimeError(format!(
+                        r#"The drawer with handle "{id}" doesn't exist."#
+                    )));
+                },
+            }
+
+            Ok(())
+        })
+        .unwrap();
+
     //Set all the functions in the global handle of the lua runtime
     lua_vm.globals().set("new", new).unwrap();
     lua_vm.globals().set("remove", remove).unwrap();
@@ -1090,15 +1221,16 @@ pub fn init_lua_functions(
     lua_vm.globals().set("notification", notification).unwrap();
     lua_vm.globals().set("position", position).unwrap();
     lua_vm.globals().set("rectangle", rectangle).unwrap();
+    lua_vm.globals().set("set_drawer_angle", set_drawer_angle).unwrap();
+    lua_vm.globals().set("point_to", point_to).unwrap();
 }
 
 #[cfg(target_family = "wasm")]
 pub fn init_lua_functions_wasm(
     mut lua_rt: ResMut<LuaRuntime>,
-    // mut lua_rt: piccolo::Lua,
     draw_requester: Res<DrawRequester>,
     drawers_handle: Drawers,
-    output_list: Arc<RwLock<Vec<ScriptLinePrompts>>>,
+    output_list: Arc<RwLock<SetLenBuffer<ScriptLinePrompts>>>,
     demo_buffer: DemoBuffer<Vec<DemoStep>>,
     toast_handle: Arc<Mutex<Toasts>>,
 )
